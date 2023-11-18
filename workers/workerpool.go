@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"gotils/config"
-	"gotils/logger"
+	log "gotils/logger"
 	"sync"
 )
 
@@ -25,71 +25,66 @@ var (
 )
 
 type WorkerPool struct {
-	ctx       context.Context
-	prefix    string
-	workers   int
+	logger    *log.Logger
+	config    *config.Config
 	waitGroup sync.WaitGroup
-	tasks     chan Task
 	start     sync.Once
 	stop      sync.Once
 	quit      chan bool
+	tasks     chan Task
 }
 
-func NewWorkerPool(ctx context.Context, options *config.Config) (*WorkerPool, error) {
-	config := config.NewConfigWithInitialValues(ctx, defaultWorkerConfig)
-	config.Merge(options, true)
-	workers, err := config.GetInt("WORKERS")
-	if err != nil {
-		return nil, err
+func NewWorkerPool(options *config.Config) (*WorkerPool, WorkerError) {
+	config := config.NewConfigWithInitialValues(defaultWorkerConfig)
+	if err := config.Merge(options, true); err != nil {
+		return nil, &InitError{nested: err}
 	}
-	loggerConfig, err := config.GetConfig("LOGGER")
-	if err != nil {
-		return nil, err
-	}
-	prefix, err := loggerConfig.GetString("PREFIX")
-	if err != nil {
-		return nil, err
+	if err := config.CompareDefault(defaultWorkerConfig); err != nil {
+		return nil, &InitError{nested: err}
 	}
 
-	if err := logger.RegisterLogger(ctx, loggerConfig); err != nil {
-		return nil, err
+	loggerConfig, _ := config.GetConfig("LOGGER")
+
+	logger, err := log.NewLogger(loggerConfig)
+	if err != nil {
+		return nil, &InitError{nested: err}
 	}
 
 	return &WorkerPool{
-		ctx:       ctx,
-		prefix:    prefix,
-		workers:   workers,
+		logger:    logger,
+		config:    config,
 		waitGroup: sync.WaitGroup{},
-		tasks:     make(chan Task, workers),
-		quit:      make(chan bool, workers),
 		start:     sync.Once{},
 		stop:      sync.Once{},
 	}, nil
 }
 
-func (w *WorkerPool) Start() {
+func (w *WorkerPool) Start(ctx context.Context) {
 	w.start.Do(func() {
-		logger.Info(w.prefix, "Starting worker pool")
-		go w.cancelHook()
-		for i := 0; i < w.workers; i++ {
+		w.logger.Info("Starting worker pool")
+		workers, _ := w.config.GetInt("WORKERS")
+		w.quit = make(chan bool)
+		w.tasks = make(chan Task, workers*2)
+		go w.cancelHook(ctx)
+		for i := 0; i < workers; i++ {
 			go w.worker()
 		}
 	})
 }
 
-func (w *WorkerPool) cancelHook() {
-	<-w.ctx.Done()
-	logger.Debug(w.prefix, "Shutting down worker pool")
+func (w *WorkerPool) cancelHook(ctx context.Context) {
+	<-ctx.Done()
+	w.logger.Debug("Shutting down worker pool")
 	w.Stop()
 }
 
 func (w *WorkerPool) Stop() {
 	w.stop.Do(func() {
-		logger.Info(w.prefix, "Stopping worker pool")
+		w.logger.Info("Stopping worker pool")
 		close(w.quit)
 
-		logger.Debug(w.prefix, "Awaiting worker pool to finish")
-		logger.Debug(w.prefix, fmt.Sprintf("Tasks in queue: %d", len(w.tasks)))
+		w.logger.Debug("Awaiting worker pool to finish")
+		w.logger.Debug(fmt.Sprintf("Tasks in queue: %d", len(w.tasks)))
 		w.waitGroup.Wait()
 	})
 }
@@ -97,11 +92,9 @@ func (w *WorkerPool) Stop() {
 func (w *WorkerPool) Add(task Task) {
 	select {
 	case <-w.quit:
-		logger.Debug(w.prefix, "Worker pool is closed, dropping task")
-	case <-w.ctx.Done():
-		logger.Debug(w.prefix, "Worker pool is closed, dropping task")
+		w.logger.Debug("Worker pool is closed, dropping task")
 	case w.tasks <- task:
-		logger.Debug(w.prefix, "Adding task to worker pool")
+		w.logger.Debug("Adding task to worker pool")
 		w.waitGroup.Add(1)
 	}
 }
@@ -110,17 +103,14 @@ func (w *WorkerPool) worker() {
 	for {
 		select {
 		case <-w.quit:
-			logger.Debug(w.prefix, "Worker received quit signal")
-			return
-		case <-w.ctx.Done():
-			logger.Debug(w.prefix, "Worker received context cancel signal")
+			w.logger.Debug("Worker received quit signal")
 			return
 		case task, ok := <-w.tasks:
 			if !ok {
 				return
 			}
 			if err := task.Do(); err != nil {
-				logger.Error(w.prefix, err.Error())
+				w.logger.Error(err.Error())
 				task.OnError(err)
 			} else {
 				task.OnFinish()

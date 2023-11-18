@@ -23,14 +23,12 @@ type SubSystem interface {
 // which holds some basic functions for managing the lifecycle of a system
 type SystemWrapper struct {
 	SubSystem
-	ctx  context.Context
-	Name string
+	name string
 }
 
-func NewSystemWrapper(ctx context.Context, name string, system SubSystem) (*SystemWrapper, error) {
+func NewSystemWrapper(name string, system SubSystem) (*SystemWrapper, error) {
 	systemWrapper := &SystemWrapper{
-		ctx:       ctx,
-		Name:      name,
+		name:      name,
 		SubSystem: system,
 	}
 	return systemWrapper, nil

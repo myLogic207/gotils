@@ -26,14 +26,14 @@ var (
 
 func TestSimpleTaskExecution(t *testing.T) {
 	testCtx := context.Background()
-	testConfig := config.NewConfigWithInitialValues(testCtx, workerTestConfig)
-	workerPool, err := NewWorkerPool(testCtx, testConfig)
+	testConfig := config.NewConfigWithInitialValues(workerTestConfig)
+	workerPool, err := NewWorkerPool(testConfig)
 	if err != nil {
 		t.Log(err)
 		t.Error("WorkerPool is not creating correctly")
 		t.FailNow()
 	}
-	workerPool.Start()
+	workerPool.Start(testCtx)
 
 	for i := 0; i < 10; i++ {
 		workerPool.Add(testTask)

@@ -1,51 +1,56 @@
 package logger
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"gotils/config"
+	"io"
 	"log"
-	"math/rand"
 	"os"
-	"path"
-	"runtime"
 	"strings"
 )
 
 var (
+	ErrInitConfig    = errors.New("error initializing config")
 	ErrPrefixNotSet  = errors.New("prefix not set")
 	ErrLoggerExists  = errors.New("logger already exists")
 	ErrFileInUse     = errors.New("log file is already in use")
-	loggerList       = make(map[string]*loggerWrapper)
+	ErrFileNotActive = errors.New("log file is not active")
+	ErrSetLogger     = errors.New("error setting logger")
 	defaultLogConfig = map[string]interface{}{
+		"PREFIX":       "LOGGER",
 		"FLAGS":        "date,time,microseconds,utc,msgprefix",
 		"PREFIXLENGTH": 16,
-		"SUFFIX":       ".log",
-		"FOLDER":       "/var/log",
 		"REPLACECHAR":  "-",
 		"LEVEL":        "DEBUG",
 		"WRITERS": map[string]interface{}{
 			"STDOUT": true,
-			"FILE":   false,
+			"SYSLOG": false,
+			"FILE": map[string]interface{}{
+				"ACTIVE": false,
+			},
 		},
-		"ROTATING":     false,
-		"ROTATEFORMAT": "$prefix.$date.$time.$suffix",
-		// "OUTFILE": path.Join(FOLDER, PREFIX+SUFFIX)
+	}
+	logFlagMap = map[string]int{
+		"date":         log.Ldate,
+		"time":         log.Ltime,
+		"microseconds": log.Lmicroseconds,
+		"utc":          log.LUTC,
+		"shortfile":    log.Lshortfile,
+		"longfile":     log.Llongfile,
+		"msgprefix":    log.Lmsgprefix,
+		"stdflags":     log.LstdFlags,
 	}
 )
 
-type loggerWrapper struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	logger     *log.Logger
-	writer     *logWriter
-	level      LogLevel
-	terminated chan bool
+type Logger struct {
+	config  *config.Config
+	logger  *log.Logger
+	logFile *LogFile
 }
 
-func GetDefaultConfig(ctx context.Context) *config.Config {
-	return config.NewConfigWithInitialValues(ctx, defaultLogConfig)
+func GetDefaultConfig() *config.Config {
+	return config.NewConfigWithInitialValues(defaultLogConfig)
 }
 
 func SetDefaultConfig(cnf *config.Config) error {
@@ -61,108 +66,119 @@ func SetDefaultConfig(cnf *config.Config) error {
 	return nil
 }
 
-func RegisterLogger(ctx context.Context, configOptions *config.Config) error {
-	cfg := config.NewConfigWithInitialValues(ctx, defaultLogConfig)
+func NewLogger(configOptions *config.Config) (*Logger, error) {
+	cfg := config.NewConfigWithInitialValues(defaultLogConfig)
 	if err := cfg.Merge(configOptions, true); err != nil {
-		return err
+		return nil, errors.Join(ErrInitConfig, err)
 	}
-
-	prefix, err := cfg.GetString("PREFIX")
-	if err != nil {
-		return ErrPrefixNotSet
-	}
-	prefix = strings.ReplaceAll(prefix, " ", defaultLogConfig["REPLACECHAR"].(string))
-	prefix = strings.ToUpper(prefix)
-
-	if _, ok := loggerList[prefix]; ok {
-		return ErrLoggerExists
-	}
-
 	if err := cfg.CompareDefault(defaultLogConfig); err != nil {
-		return err
+		return nil, errors.Join(ErrInitConfig, err)
 	}
 
-	prefixLength, _ := cfg.GetInt("PREFIXLENGTH")
-	flags, _ := cfg.GetString("FLAGS")
-	rawLogLevel, _ := cfg.GetString("LEVEL")
+	cfg.Sprint()
+	wrapper := &Logger{
+		config: cfg,
+		logger: nil,
+	}
+
+	if err := wrapper.setLogger(); err != nil {
+		return nil, err
+	}
+
+	log.Println("Starting log stream for new logger:", strings.TrimSpace(wrapper.logger.Prefix()))
+	return wrapper, nil
+}
+
+func (l *Logger) parseLogLevel() error {
+	rawLogLevel, _ := l.config.GetString("LEVEL")
 	logLevel, err := resolveLogLevel(rawLogLevel)
 	if err != nil {
 		return err
 	}
-	logToConsole, _ := cfg.GetBool("WRITERS.STDOUT")
-	logToFile, _ := cfg.GetBool("WRITERS.FILE")
-	logSuffix, _ := cfg.GetString("SUFFIX")
-	logFolder, _ := cfg.GetString("FOLDER")
-	rotating, _ := cfg.GetBool("ROTATING")
-	rotateFormat, _ := cfg.GetString("ROTATEFORMAT")
-
-	var logFile string
-	logFile, err = cfg.GetString("OUTFILE")
-	if err != nil || logFile == "" {
-		logFile = path.Join(logFolder, prefix+logSuffix)
-		logFile = strings.ToLower(logFile)
+	if err := l.config.Set("LEVEL", logLevel, true); err != nil {
+		return err
 	}
-	if !path.IsAbs(logFile) {
-		cwd, err := os.Getwd()
-		if err != nil {
+	return nil
+}
+
+func (l *Logger) Shutdown() error {
+	println("Shutting down logger")
+	if logToFile, _ := l.config.GetBool("WRITERS/FILE/ACTIVE"); logToFile {
+		if err := l.logFile.Close(); err != nil {
+			log.Println("Error closing log writer:", err)
 			return err
 		}
-		logFile = path.Join(cwd, logFile)
 	}
+	l.logger.Println("Shutting down logger")
+	l.logger = nil
+	return nil
+}
 
-	if logToFile {
-		if file, err := generateLogFile(logFile); err != nil {
-			return err
-		} else {
-			file.Close()
-		}
+func (l *Logger) UpdateLogger(config *config.Config) error {
+	if err := l.config.Merge(config, true); err != nil {
+		return err
 	}
-
-	writer, err := newLogWriter(logToConsole, logToFile, logFile, rotating, rotateFormat)
-	if err != nil {
+	if err := l.config.CompareDefault(defaultLogConfig); err != nil {
 		return err
 	}
 
-	logger := log.New(
-		writer,
-		generateLogPrefix(prefix, prefixLength),
-		generateLogFlags(flags),
-	)
-
-	log.Println("Starting log stream for new logger: ", prefix)
-
-	subCtx, cancel := context.WithCancel(ctx)
-	logWrapper := &loggerWrapper{
-		ctx:        subCtx,
-		cancel:     cancel,
-		logger:     logger,
-		writer:     writer,
-		level:      logLevel,
-		terminated: make(chan bool),
+	if err := l.Shutdown(); err != nil {
+		return err
 	}
-	go logWrapper.shutdownHook()
-	loggerList[prefix] = logWrapper
+
+	if err := l.setLogger(); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func (l *loggerWrapper) shutdownHook() {
-	<-l.ctx.Done()
-	println("Shutting down logger")
-	if err := l.writer.Close(); err != nil {
-		log.Println("Error closing log writer:", err)
+func (l *Logger) setLogger() error {
+	if err := l.parseLogLevel(); err != nil {
+		return err
 	}
-	l.terminated <- true
+
+	prefixLength, _ := l.config.GetInt("PREFIXLENGTH")
+	rawPrefix, _ := l.config.GetString("PREFIX")
+	rawFlags, _ := l.config.GetString("FLAGS")
+
+	if writer, err := l.generateWriter(); err != nil {
+		return errors.Join(ErrSetLogger, err)
+	} else {
+		l.logger = log.New(writer,
+			formatPrefix(rawPrefix, prefixLength),
+			generateLogFlags(rawFlags))
+	}
+	return nil
 }
 
-func UnregisterLogger(prefix string) error {
-	if _, ok := loggerList[prefix]; !ok {
-		return ErrLoggerExists
+func (l *Logger) generateWriter() (io.Writer, error) {
+	var writers []io.Writer
+	if ok, _ := l.config.GetBool("WRITERS/STDOUT"); ok {
+		writers = append(writers, os.Stdout)
 	}
-	loggerList[prefix].cancel()
-	<-loggerList[prefix].terminated
-	delete(loggerList, prefix)
-	return nil
+
+	file, err := l.getLogFile()
+	if err != nil && !errors.Is(err, ErrFileNotActive) {
+		return nil, errors.Join(ErrOpenLogFile, err)
+	} else if err == nil && file != nil {
+		writers = append(writers, file)
+	}
+
+	return io.MultiWriter(writers...), nil
+}
+
+func (l *Logger) getLogFile() (*LogFile, error) {
+	fileActive, _ := l.config.GetBool("WRITERS/FILE/ACTIVE")
+	if !fileActive {
+		return nil, ErrFileNotActive
+	}
+	fileOptions, _ := l.config.GetConfig("WRITERS/FILE")
+	if file, err := NewLogFile(fileOptions); err != nil {
+		return nil, errors.Join(ErrOpenLogFile, err)
+	} else {
+		return file, nil
+	}
 }
 
 // SetDefaultLoggerFlags sets the default flags for the logger
@@ -173,117 +189,65 @@ func generateLogFlags(flags string) int {
 	flagList := strings.Split(flags, ",")
 	flagBuffer := 0
 	for _, flag := range flagList {
-		switch strings.ToLower(flag) {
-		case "date":
-			flagBuffer |= log.Ldate
-		case "time":
-			flagBuffer |= log.Ltime
-		case "microseconds":
-			flagBuffer |= log.Lmicroseconds
-		case "utc":
-			flagBuffer |= log.LUTC
-		case "shortfile":
-			flagBuffer |= log.Lshortfile
-		case "longfile":
-			flagBuffer |= log.Llongfile
-		case "msgprefix":
-			flagBuffer |= log.Lmsgprefix
-		case "stdflags":
-			flagBuffer |= log.LstdFlags
-		default:
-			log.Println("unknown flag", flag)
+		if flag, ok := logFlagMap[flag]; ok {
+			flagBuffer |= flag
 		}
 	}
 	return flagBuffer
 }
 
-func generateLogFile(filepath string) (*os.File, error) {
-	// check if path is valid
-	if filepath == "" {
-		return nil, errors.New("path is empty")
-	}
+func formatPrefix(rawPrefix string, prefixLength int) string {
+	prefix := strings.ReplaceAll(strings.ToUpper(rawPrefix), " ", defaultLogConfig["REPLACECHAR"].(string))
 
-	dir := path.Dir(filepath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, err
-	}
-
-	if _, err := os.Stat(filepath); !os.IsNotExist(err) {
-		return nil, ErrFileInUse
-	}
-
-	// log.Println("Creating log file at", filepath)
-	file, err := os.Create(filepath)
-	if err != nil {
-		return nil, err
-	}
-	return file, nil
-}
-
-func generateLogPrefix(raw_prefix string, length int) string {
-	var prefix string
-	if raw_prefix == "" {
-		prefix = fmt.Sprintf("logger-%d", rand.Intn(1000))
-	} else {
-		prefix = raw_prefix
-	}
-
-	if len(raw_prefix) < length {
-		prefix += strings.Repeat(" ", length-len(raw_prefix))
+	if len(prefix) < prefixLength {
+		prefix += strings.Repeat(" ", prefixLength-len(rawPrefix))
 	}
 
 	return prefix
 }
 
-func Log(prefix string, level LogLevel, msg string) {
-	_, file, line, ok := runtime.Caller(2)
-	if !ok {
-		file = "???"
-		line = 0
+// Arguments are handled in the manner of fmt.Print.
+func (l *Logger) logf(callDepth int, level LogLevel, msg string, args ...any) {
+	callDepth++ // =1 for this frame
+	logsMsg := level.Sprint() + " " + fmt.Sprintf(msg, args...)
+	if err := l.logger.Output(callDepth, logsMsg); err != nil {
+		println("Error logging message:", err)
 	}
-	if !ok {
-		log.Printf("Invalid call to logger %s from %s:%d\n", prefix, file, line)
+}
+
+func (l *Logger) log(callDepth int, level LogLevel, msg ...any) {
+	callDepth++ // =1 for this frame
+	logsMsg := level.Sprint() + " " + fmt.Sprint(msg...)
+	if err := l.logger.Output(callDepth, logsMsg); err != nil {
+		println("Error logging message:", err)
+	}
+}
+
+func (l *Logger) Log(level LogLevel, msg ...any) {
+	loggerLevel, _ := l.config.Get("LEVEL")
+	if loggerLevel.(LogLevel) > level {
 		return
 	}
-	wrapper, ok := loggerList[prefix]
-	if !ok || level < wrapper.level {
-		return
-	}
-	file = path.Base(file)
-	message := fmt.Sprintf(" [%s] (%s:%d)\t%s", level.Sprint(), file, line, msg)
-	wrapper.logger.Println(message)
-}
 
-func Info(prefix string, msg string) {
-	Log(prefix, LevelInfo, msg)
-}
-
-func Debug(prefix string, msg string) {
-	Log(prefix, LevelDebug, msg)
-}
-
-func Warn(prefix string, msg string) {
-	Log(prefix, LevelWarn, msg)
-}
-
-func Error(prefix string, msg string) {
-	Log(prefix, LevelError, msg)
-}
-
-func Cleanup() {
-	log.Println("Closing all loggers")
-	for prefix := range loggerList {
-		if err := UnregisterLogger(prefix); err != nil {
-			log.Println("Error closing logger:", err)
-		}
+	if !strings.Contains(msg[0].(string), "%") {
+		l.log(2, LevelInfo, msg...)
+	} else {
+		l.logf(2, LevelInfo, msg[0].(string), msg[1:]...)
 	}
 }
 
-func CleanupMsg(msg string) {
-	for prefix, wrapper := range loggerList {
-		wrapper.logger.Println(msg)
-		if err := UnregisterLogger(prefix); err != nil {
-			log.Println("Error closing logger:", err)
-		}
-	}
+func (l *Logger) Info(msg ...any) {
+	l.Log(LevelInfo, msg...)
+}
+
+func (l *Logger) Debug(msg ...any) {
+	l.Log(LevelDebug, msg...)
+}
+
+func (l *Logger) Warn(msg ...any) {
+	l.Log(LevelWarn, msg...)
+}
+
+func (l *Logger) Error(msg ...any) {
+	l.Log(LevelError, msg...)
 }

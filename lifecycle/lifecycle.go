@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"gotils/config"
-	"log"
+	log "gotils/logger"
 	"os"
 	"os/signal"
 	"sync"
@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	CONFIGKEY_SYSTEMS = "SYSTEMCONFIGS"
+	KEY_SYSTEMS = "SYSTEMCONFIGS"
 )
 
 var (
@@ -53,35 +53,31 @@ func CatchInterrupt(cancel context.CancelFunc) {
 // when init is called, it loads the config, merges it with the default config and then initializes the subsystems
 // it also registers a shutdown hook that cancels the context
 type Initializer struct {
-	ctx         context.Context
 	initialized bool
+	logger      *log.Logger
 	systems     map[string]SubSystem
-	timeout     time.Duration
 	configTree  *config.Config
 }
 
 func NewInitializer(ctx context.Context, options *config.Config) (*Initializer, error) {
-	cfg := config.NewConfigWithInitialValues(ctx, defaultConfig)
+	cfg := config.NewConfigWithInitialValues(defaultConfig)
 	cfg.Merge(options, true)
 	if err := cfg.CompareDefault(defaultConfig); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
 
-	timeout, err := cfg.GetDuration("TIMEOUT")
+	logger, err := log.NewLogger(cfg)
 	if err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
 
 	initSystem := &Initializer{
-		ctx:         ctx,
+		logger:      logger,
 		systems:     make(map[string]SubSystem),
 		initialized: false,
-		timeout:     timeout,
 		configTree:  cfg,
 	}
-	if err := initSystem.configTree.Set(CONFIGKEY_SYSTEMS, make(map[string]interface{}), true); err != nil {
-		return nil, errors.Join(ErrInitConfig, err)
-	}
+
 	return initSystem, nil
 }
 
@@ -93,14 +89,17 @@ func (i *Initializer) AddSystem(name string, system interface{}, configOptions *
 	if _, ok := i.systems[name]; ok {
 		return ErrSystemRegistered
 	}
-	systemWrapper, err := NewSystemWrapper(i.ctx, name, validSystem)
+	i.logger.Info("Adding system: ", name)
+	systemWrapper, err := NewSystemWrapper(name, validSystem)
 	if err != nil {
 		return ErrWrappingSystem
 	}
-	if err := i.configTree.Set(CONFIGKEY_SYSTEMS+config.CONFIG_TREE_SEPARATOR+name, configOptions, true); err != nil {
+	systemKey := KEY_SYSTEMS + config.CONFIG_TREE_SEPARATOR + name
+	if err := i.configTree.Set(systemKey, configOptions, true); err != nil {
 		return errors.Join(ErrInitConfig, err)
 	}
 	i.systems[name] = systemWrapper
+	i.logger.Debug("System added: ", name)
 	return nil
 }
 
@@ -117,11 +116,12 @@ func (i *Initializer) RemoveSystem(name string) error {
 	if _, ok := i.systems[name]; !ok {
 		return ErrNoSystem
 	}
+	i.logger.Info("Removing system", name)
 	delete(i.systems, name)
 	return nil
 }
 
-func (i *Initializer) Init(envPrefix string) error {
+func (i *Initializer) Init(ctx context.Context, envPrefixes []string) error {
 	if len(i.systems) == 0 {
 		return ErrNothingToInit
 	}
@@ -130,37 +130,39 @@ func (i *Initializer) Init(envPrefix string) error {
 	}
 	i.initialized = true
 
-	log.Println("Initializing system")
-	loadedOptions, err := config.LoadConfig(envPrefix, i.ctx)
-	if err != nil {
+	i.logger.Info("Initializing system")
+	loadedOptions, err := config.LoadConfig(ctx, envPrefixes, nil, false)
+	if err != nil && !errors.Is(err, config.ErrNoConfigSource) {
 		return err
-	}
-	if err := i.configTree.Merge(loadedOptions, true); err != nil {
+	} else if errors.Is(err, config.ErrNoConfigSource) {
+		i.logger.Warn("No config source found")
+	} else if err := i.configTree.Merge(loadedOptions, true); err != nil {
 		return errors.Join(ErrInitConfig, err)
 	}
+	print(i.configTree.Sprint())
 
-	systemConfig, err := i.configTree.GetConfig(CONFIGKEY_SYSTEMS)
-	if err != nil {
-		return errors.Join(ErrInitConfig, err)
-	}
-
-	return unrestrictedInit(i.ctx, i.timeout, systemConfig, i.systems)
+	return i.unrestrictedInit(ctx)
 }
 
-func unrestrictedInit(ctx context.Context, timeout time.Duration, masterConfig *config.Config, systems map[string]SubSystem) error {
+func (i *Initializer) unrestrictedInit(ctx context.Context) error {
+	systemConfig, err := i.configTree.GetConfig(KEY_SYSTEMS)
+	if err != nil {
+		return errors.Join(ErrInitConfig, err)
+	}
+
 	errChan := make(chan error)
 	finishChan := make(chan bool)
 	waitGroup := sync.WaitGroup{}
-	masterConfig.Print()
+	print(systemConfig.Sprint())
 
-	for systemName, subSystem := range systems {
+	for systemName, subSystem := range i.systems {
 		waitGroup.Add(1)
-		log.Println("Initializing", systemName)
-		systemConfig, err := masterConfig.GetConfig(systemName)
+		i.logger.Info("Initializing", systemName)
+		systemConfig, err := systemConfig.GetConfig(systemName)
 		if err != nil || systemConfig == nil {
 			return errors.Join(ErrInitConfig, err)
 		}
-		log.Println("Config loaded")
+		i.logger.Info("Config loaded")
 		go func(system SubSystem, c *config.Config) {
 			errChan <- system.Init(ctx, c)
 			waitGroup.Done()
@@ -173,7 +175,7 @@ func unrestrictedInit(ctx context.Context, timeout time.Duration, masterConfig *
 		close(errChan)
 	}()
 
-	return HandleFinishStream(timeout, errChan, finishChan)
+	return i.handleFinishStream(errChan, finishChan)
 }
 
 func (i *Initializer) Shutdown() error {
@@ -182,7 +184,7 @@ func (i *Initializer) Shutdown() error {
 	finishChan := make(chan bool)
 
 	for name, system := range i.systems {
-		log.Println("Shutting down", name)
+		i.logger.Info("Shutting down", name)
 		waitGroup.Add(1)
 		go func(s SubSystem) {
 			errChan <- s.Shutdown()
@@ -196,19 +198,24 @@ func (i *Initializer) Shutdown() error {
 		close(errChan)
 	}()
 
-	return HandleFinishStream(i.timeout, errChan, finishChan)
+	return i.handleFinishStream(errChan, finishChan)
 }
 
-func HandleFinishStream(timeout time.Duration, errChan <-chan error, finished <-chan bool) error {
+func (i *Initializer) handleFinishStream(errChan <-chan error, finished <-chan bool) error {
+	timeout, _ := i.configTree.GetDuration("TIMEOUT")
 	var joinedErr error
 	for {
 		select {
 		case <-time.After(timeout):
-			return errors.Join(ErrTimeout, joinedErr)
+			i.logger.Warn("Operation timed out")
+			return ErrTimeout
 		case err := <-errChan:
-			joinedErr = errors.Join(joinedErr, err)
+			if err != nil {
+				i.logger.Error("Error received: ", err.Error())
+				joinedErr = errors.Join(joinedErr, err)
+			}
 		case <-finished:
-			log.Println("Finished")
+			i.logger.Info("Finished")
 			return joinedErr
 		}
 	}

@@ -2,16 +2,12 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
 var (
-	ErrKeyNotFound    = errors.New("key not found")
-	ErrFieldNotConfig = errors.New("field is not a config")
-	ErrFieldNotString = errors.New("field is not a string")
-	ErrFieldNotInt    = errors.New("field is not an int")
-	ErrFieldNotFloat  = errors.New("field is not a float")
-	ErrFieldNotBool   = errors.New("field is not a bool")
+	ErrTypeMismatch = errors.New("type mismatch")
 )
 
 func (c *Config) GetString(key string) (string, error) {
@@ -22,7 +18,9 @@ func (c *Config) GetString(key string) (string, error) {
 	if str, ok := entry.(string); ok {
 		return str, nil
 	}
-	return "", ErrFieldNotString
+	return "", &ErrFieldNotString{
+		key: key,
+	}
 }
 
 func (c *Config) GetInt(key string) (int, error) {
@@ -33,7 +31,9 @@ func (c *Config) GetInt(key string) (int, error) {
 	if num, ok := entry.(int); ok {
 		return num, nil
 	}
-	return 0, errors.Join(ErrFieldNotInt, errors.New(key))
+	return 0, &ErrFieldNotInt{
+		key: key,
+	}
 }
 
 func (c *Config) GetFloat(key string) (float64, error) {
@@ -44,7 +44,9 @@ func (c *Config) GetFloat(key string) (float64, error) {
 	if num, ok := entry.(float64); ok {
 		return num, nil
 	}
-	return 0, errors.Join(ErrFieldNotFloat, errors.New(key))
+	return 0, &ErrFieldNotFloat{
+		key: key,
+	}
 }
 
 func (c *Config) GetBool(key string) (bool, error) {
@@ -52,18 +54,71 @@ func (c *Config) GetBool(key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if boolean, ok := entry.(bool); ok {
-		return boolean, nil
+	return resolveBool(key, entry)
+}
+
+func resolveBool(key string, raw any) (bool, error) {
+	err := &ErrFieldNotBool{
+		key: key,
 	}
-	return false, errors.Join(ErrFieldNotBool, errors.New(key))
+	switch entry := raw.(type) {
+	case string:
+		return resolveStringBool(key, entry)
+	case bool:
+		return entry, nil
+	case int:
+		return entry != 0, nil
+	default:
+		return false, err
+	}
+}
+
+func resolveStringBool(key string, raw string) (bool, error) {
+	raw = strings.ToLower(raw)
+	switch raw {
+	case "yes":
+		fallthrough
+	case "y":
+		fallthrough
+	case "1":
+		fallthrough
+	case "true":
+		return true, nil
+	case "no":
+		fallthrough
+	case "n":
+		fallthrough
+	case "0":
+		fallthrough
+	case "false":
+		return false, nil
+	default:
+		return false, &ErrFieldNotBool{
+			key: key,
+		}
+	}
 }
 
 func (c *Config) GetDuration(key string) (time.Duration, error) {
-	entry, err := c.GetString(key)
+	raw, err := c.Get(key)
 	if err != nil {
 		return time.Duration(0), err
 	}
-	return time.ParseDuration(entry)
+	durErr := &ErrFieldNotDuration{
+		key: key,
+	}
+	switch entry := raw.(type) {
+	case string:
+		duration, err := time.ParseDuration(entry)
+		if err != nil {
+			return time.Duration(0), durErr
+		}
+		return duration, nil
+	case int:
+		return time.Duration(entry) * time.Millisecond, nil
+	default:
+		return time.Duration(0), durErr
+	}
 }
 
 func (c *Config) GetConfig(key string) (*Config, error) {
@@ -71,8 +126,10 @@ func (c *Config) GetConfig(key string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config, ok := entry.(*Config); ok {
-		return config, nil
+	if config, ok := entry.(map[string]interface{}); ok {
+		return NewConfigWithInitialValues(config), nil
 	}
-	return nil, errors.Join(ErrFieldNotConfig, errors.New(key))
+	return NewConfigWithInitialValues(map[string]interface{}{
+		key: entry,
+	}), nil
 }
