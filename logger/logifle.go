@@ -189,6 +189,8 @@ func (l *LogFile) formatFilename(format string) string {
 		switch part {
 		case "$prefix":
 			prefix, _ := l.config.GetString("PREFIX")
+			prefix = strings.ReplaceAll(prefix, " ", "_")
+			prefix = strings.ToLower(prefix)
 			buffer.WriteString(prefix)
 		case "$suffix":
 			suffix, _ := l.config.GetString("SUFFIX")
