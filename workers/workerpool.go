@@ -3,103 +3,67 @@ package workers
 import (
 	"context"
 	"fmt"
-	"gotils/config"
 	log "gotils/logger"
 	"sync"
 )
 
-var (
-	defaultWorkerConfig = map[string]interface{}{
-		"LOGGER": map[string]interface{}{
-			"PREFIX": "WORKERPOOL",
-		},
-		"WORKERS": 3,
-		"BUFFER": map[string]interface{}{
-			"SIZE": 100,
-			"MODE": 1, // 1 = queue, 0 = stack
-			"LOGGER": map[string]interface{}{
-				"PREFIX": "WORKERPOOL-BUFFER",
-			},
-		},
-	}
-)
+type contextKey string
+
+var workerId = contextKey("worker_id")
 
 type WorkerPool struct {
 	logger    *log.Logger
-	config    *config.Config
 	waitGroup sync.WaitGroup
-	start     sync.Once
-	stop      sync.Once
 	quit      chan bool
 	tasks     chan Task
 }
 
-func NewWorkerPool(options *config.Config) (*WorkerPool, WorkerError) {
-	config := config.NewConfigWithInitialValues(defaultWorkerConfig)
-	if err := config.Merge(options, true); err != nil {
-		return nil, &InitError{nested: err}
-	}
-	if err := config.CompareDefault(defaultWorkerConfig); err != nil {
-		return nil, &InitError{nested: err}
-	}
-
-	loggerConfig, _ := config.GetConfig("LOGGER")
-
-	logger, err := log.NewLogger(loggerConfig)
-	if err != nil {
-		return nil, &InitError{nested: err}
-	}
-
-	return &WorkerPool{
+func NewWorkerPool(ctx context.Context, size int, logger *log.Logger) (*WorkerPool, WorkerError) {
+	pool := &WorkerPool{
 		logger:    logger,
-		config:    config,
 		waitGroup: sync.WaitGroup{},
-		start:     sync.Once{},
-		stop:      sync.Once{},
-	}, nil
+		quit:      make(chan bool),
+		tasks:     make(chan Task, size),
+	}
+	pool.logger.Debug(fmt.Sprintf("Creating worker pool with %d workers", size))
+	for i := 0; i < size; i++ {
+		workerCtx := context.WithValue(ctx, workerId, i)
+		go pool.worker(workerCtx)
+	}
+	go pool.stopOnCancel(ctx)
+	pool.logger.Debug("Worker pool initialized")
+	return pool, nil
 }
 
-func (w *WorkerPool) Start(ctx context.Context) {
-	w.start.Do(func() {
-		w.logger.Info("Starting worker pool")
-		workers, _ := w.config.GetInt("WORKERS")
-		w.quit = make(chan bool)
-		w.tasks = make(chan Task, workers*2)
-		go w.cancelHook(ctx)
-		for i := 0; i < workers; i++ {
-			go w.worker()
-		}
-	})
-}
-
-func (w *WorkerPool) cancelHook(ctx context.Context) {
+func (w *WorkerPool) stopOnCancel(ctx context.Context) {
 	<-ctx.Done()
-	w.logger.Debug("Shutting down worker pool")
-	w.Stop()
-}
-
-func (w *WorkerPool) Stop() {
-	w.stop.Do(func() {
-		w.logger.Info("Stopping worker pool")
-		close(w.quit)
-
-		w.logger.Debug("Awaiting worker pool to finish")
-		w.logger.Debug(fmt.Sprintf("Tasks in queue: %d", len(w.tasks)))
-		w.waitGroup.Wait()
-	})
+	w.logger.Warn("Stopping worker pool")
+	close(w.quit)
+	w.logger.Info("Awaiting worker pool to finish")
+	w.logger.Debug(fmt.Sprintf("Tasks in queue: %d", len(w.tasks)))
+	w.waitGroup.Wait()
 }
 
 func (w *WorkerPool) Add(task Task) {
+	w.logger.Debug(fmt.Sprintf("Received, task. Tasks in queue: %d", len(w.tasks)))
+	if w.quit == nil {
+		w.logger.Warn("Worker pool is not started, dropping task")
+		return
+	}
+	if len(w.tasks)-1 >= cap(w.tasks) {
+		w.logger.Warn("Worker pool is full, dropping task")
+		return
+	}
 	select {
 	case <-w.quit:
-		w.logger.Debug("Worker pool is closed, dropping task")
+		w.logger.Warn("Worker pool is closed, dropping task")
 	case w.tasks <- task:
-		w.logger.Debug("Adding task to worker pool")
+		w.logger.Info("Adding task to worker pool")
 		w.waitGroup.Add(1)
 	}
 }
 
-func (w *WorkerPool) worker() {
+func (w *WorkerPool) worker(ctx context.Context) {
 	for {
 		select {
 		case <-w.quit:
@@ -109,7 +73,7 @@ func (w *WorkerPool) worker() {
 			if !ok {
 				return
 			}
-			if err := task.Do(); err != nil {
+			if err := task.Do(ctx); err != nil {
 				w.logger.Error(err.Error())
 				task.OnError(err)
 			} else {
@@ -121,7 +85,7 @@ func (w *WorkerPool) worker() {
 }
 
 type Task interface {
-	Do() error
+	Do(ctx context.Context) error
 	OnFinish()
 	OnError(error)
 }
@@ -137,7 +101,7 @@ func NewSimpleTask(function func() error) *SimpleTask {
 	}
 }
 
-func (t *SimpleTask) Do() error {
+func (t *SimpleTask) Do(ctx context.Context) error {
 	return t.function()
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"gotils/config"
+	log "gotils/logger"
 	"math/rand"
 	"testing"
 	"time"
@@ -26,18 +27,25 @@ var (
 
 func TestSimpleTaskExecution(t *testing.T) {
 	testCtx := context.Background()
-	testConfig := config.NewConfigWithInitialValues(workerTestConfig)
-	workerPool, err := NewWorkerPool(testConfig)
+	logger, err := log.NewLogger(config.NewConfigWithInitialValues(workerTestConfig))
+	if err != nil {
+		t.Log(err)
+		t.Error("Logger is not creating correctly")
+		t.FailNow()
+	}
+	workerPool, err := NewWorkerPool(testCtx, workerTestConfig["WORKERS"].(int), logger)
 	if err != nil {
 		t.Log(err)
 		t.Error("WorkerPool is not creating correctly")
 		t.FailNow()
 	}
-	workerPool.Start(testCtx)
 
 	for i := 0; i < 10; i++ {
 		workerPool.Add(testTask)
 	}
 
-	workerPool.Stop()
+	// allow the workers to finish
+	<-time.After(1 * time.Second)
+
+	// workerPool.Stop()
 }
