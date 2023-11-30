@@ -185,7 +185,6 @@ func (c *Config) getMatching(key string) map[string]interface{} {
 func (c *Config) Set(key string, value interface{}, force bool) error {
 	key = strings.TrimSpace(key)
 	key = strings.ToUpper(key)
-
 	var flatMapVal map[string]interface{}
 	switch entry := value.(type) {
 	case *Config:
@@ -193,7 +192,7 @@ func (c *Config) Set(key string, value interface{}, force bool) error {
 	case map[string]interface{}:
 		flatMapVal = flattenMap(entry)
 	case string:
-		raw := strings.TrimSpace(entry)
+		raw := strings.Trim(entry, " ")
 		c.set(key, raw)
 		return nil
 	default:
@@ -348,7 +347,7 @@ func nestedMapToString(m map[string]interface{}) string {
 				buffer.WriteString(fmt.Sprintf("\t%s\n", line))
 			}
 		default:
-			buffer.WriteString(fmt.Sprintf("%s: %v\n", key, value))
+			buffer.WriteString(fmt.Sprintf("%s: %v", key, value))
 		}
 	}
 	return buffer.String()
