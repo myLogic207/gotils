@@ -3,11 +3,12 @@ package logger
 import (
 	"errors"
 	"fmt"
-	"gotils/config"
 	"io"
 	"log"
 	"os"
 	"strings"
+
+	"github.com/myLogic207/gotils/config"
 )
 
 var (

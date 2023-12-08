@@ -3,7 +3,8 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"gotils/config"
+
+	"github.com/myLogic207/gotils/config"
 )
 
 var (

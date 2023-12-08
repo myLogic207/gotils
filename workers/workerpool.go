@@ -3,8 +3,9 @@ package workers
 import (
 	"context"
 	"fmt"
-	log "gotils/logger"
 	"sync"
+
+	log "github.com/myLogic207/gotils/logger"
 )
 
 type contextKey string

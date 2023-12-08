@@ -3,11 +3,12 @@ package workers
 import (
 	"context"
 	"fmt"
-	"gotils/config"
-	log "gotils/logger"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/myLogic207/gotils/config"
+	log "github.com/myLogic207/gotils/logger"
 )
 
 var (

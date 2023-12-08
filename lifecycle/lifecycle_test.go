@@ -3,9 +3,10 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"gotils/config"
 	"log"
 	"testing"
+
+	"github.com/myLogic207/gotils/config"
 )
 
 var (

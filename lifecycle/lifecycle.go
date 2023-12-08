@@ -3,13 +3,14 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"gotils/config"
-	log "gotils/logger"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/myLogic207/gotils/config"
+	log "github.com/myLogic207/gotils/logger"
 )
 
 const (

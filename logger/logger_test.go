@@ -1,12 +1,13 @@
 package logger
 
 import (
-	config "gotils/config"
 	"os"
 	"path"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/myLogic207/gotils/config"
 )
 
 func TestLogToFile(t *testing.T) {
