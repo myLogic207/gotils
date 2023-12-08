@@ -56,10 +56,10 @@ type Initializer struct {
 	initialized bool
 	logger      *log.Logger
 	systems     map[string]SubSystem
-	configTree  *config.Config
+	configTree  config.Config
 }
 
-func NewInitializer(ctx context.Context, options *config.Config) (*Initializer, error) {
+func NewInitializer(ctx context.Context, options config.Config) (*Initializer, error) {
 	cfg := config.NewConfigWithInitialValues(defaultConfig)
 	cfg.Merge(options, true)
 	if err := cfg.CompareDefault(defaultConfig); err != nil {
@@ -81,7 +81,7 @@ func NewInitializer(ctx context.Context, options *config.Config) (*Initializer, 
 	return initSystem, nil
 }
 
-func (i *Initializer) AddSystem(name string, system interface{}, configOptions *config.Config) error {
+func (i *Initializer) AddSystem(name string, system interface{}, configOptions config.Config) error {
 	validSystem, ok := system.(SubSystem)
 	if !ok {
 		return ErrInvalidSystem
@@ -89,7 +89,7 @@ func (i *Initializer) AddSystem(name string, system interface{}, configOptions *
 	if _, ok := i.systems[name]; ok {
 		return ErrSystemRegistered
 	}
-	i.logger.Info("Adding system: ", name)
+	i.logger.Info("Adding system: %s", name)
 	systemWrapper, err := NewSystemWrapper(name, validSystem)
 	if err != nil {
 		return ErrWrappingSystem
@@ -99,7 +99,7 @@ func (i *Initializer) AddSystem(name string, system interface{}, configOptions *
 		return errors.Join(ErrInitConfig, err)
 	}
 	i.systems[name] = systemWrapper
-	i.logger.Debug("System added: ", name)
+	i.logger.Debug("System added: %s", name)
 	return nil
 }
 
@@ -116,7 +116,7 @@ func (i *Initializer) RemoveSystem(name string) error {
 	if _, ok := i.systems[name]; !ok {
 		return ErrNoSystem
 	}
-	i.logger.Info("Removing system", name)
+	i.logger.Info("Removing system %s", name)
 	delete(i.systems, name)
 	return nil
 }
@@ -157,13 +157,13 @@ func (i *Initializer) unrestrictedInit(ctx context.Context) error {
 
 	for systemName, subSystem := range i.systems {
 		waitGroup.Add(1)
-		i.logger.Info("Initializing", systemName)
+		i.logger.Info("Initializing %s", systemName)
 		systemConfig, err := systemConfig.GetConfig(systemName)
 		if err != nil || systemConfig == nil {
 			return errors.Join(ErrInitConfig, err)
 		}
 		i.logger.Info("Config loaded")
-		go func(system SubSystem, c *config.Config) {
+		go func(system SubSystem, c config.Config) {
 			errChan <- system.Init(ctx, c)
 			waitGroup.Done()
 		}(subSystem, systemConfig)
@@ -184,7 +184,7 @@ func (i *Initializer) Shutdown() error {
 	finishChan := make(chan bool)
 
 	for name, system := range i.systems {
-		i.logger.Info("Shutting down", name)
+		i.logger.Info("Shutting down %s", name)
 		waitGroup.Add(1)
 		go func(s SubSystem) {
 			errChan <- s.Shutdown()
@@ -211,7 +211,7 @@ func (i *Initializer) handleFinishStream(errChan <-chan error, finished <-chan b
 			return ErrTimeout
 		case err := <-errChan:
 			if err != nil {
-				i.logger.Error("Error received: ", err.Error())
+				i.logger.Error("Error received: %s", err.Error())
 				joinedErr = errors.Join(joinedErr, err)
 			}
 		case <-finished:

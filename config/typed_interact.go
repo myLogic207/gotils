@@ -10,7 +10,7 @@ var (
 	ErrTypeMismatch = errors.New("type mismatch")
 )
 
-func (c *Config) GetString(key string) (string, error) {
+func (c *ConfigStore) GetString(key string) (string, error) {
 	entry, err := c.Get(key)
 	if err != nil {
 		return "", err
@@ -23,7 +23,7 @@ func (c *Config) GetString(key string) (string, error) {
 	}
 }
 
-func (c *Config) GetInt(key string) (int, error) {
+func (c *ConfigStore) GetInt(key string) (int, error) {
 	entry, err := c.Get(key)
 	if err != nil {
 		return 0, err
@@ -36,7 +36,7 @@ func (c *Config) GetInt(key string) (int, error) {
 	}
 }
 
-func (c *Config) GetFloat(key string) (float64, error) {
+func (c *ConfigStore) GetFloat(key string) (float64, error) {
 	entry, err := c.Get(key)
 	if err != nil {
 		return 0, err
@@ -49,7 +49,7 @@ func (c *Config) GetFloat(key string) (float64, error) {
 	}
 }
 
-func (c *Config) GetBool(key string) (bool, error) {
+func (c *ConfigStore) GetBool(key string) (bool, error) {
 	entry, err := c.Get(key)
 	if err != nil {
 		return false, err
@@ -99,7 +99,7 @@ func resolveStringBool(key string, raw string) (bool, error) {
 	}
 }
 
-func (c *Config) GetDuration(key string) (time.Duration, error) {
+func (c *ConfigStore) GetDuration(key string) (time.Duration, error) {
 	raw, err := c.Get(key)
 	if err != nil {
 		return time.Duration(0), err
@@ -121,7 +121,7 @@ func (c *Config) GetDuration(key string) (time.Duration, error) {
 	}
 }
 
-func (c *Config) GetConfig(key string) (*Config, error) {
+func (c *ConfigStore) GetConfig(key string) (Config, error) {
 	entry, err := c.Get(key)
 	if err != nil {
 		return nil, err

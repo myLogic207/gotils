@@ -25,7 +25,7 @@ type Entry struct {
 
 // loads config from multiple sources
 // currently only supports env with single prefix, is wip
-func LoadConfig(ctx context.Context, envPrefixList []string, fileList []string, firstError bool) (*Config, error) {
+func LoadConfig(ctx context.Context, envPrefixList []string, fileList []string, firstError bool) (*ConfigStore, error) {
 	if len(envPrefixList) == 0 && len(fileList) == 0 {
 		return nil, ErrNoConfigSource
 	}
@@ -82,15 +82,12 @@ func LoadConfig(ctx context.Context, envPrefixList []string, fileList []string, 
 	}
 }
 
-func (c *Config) LoadEnv(envPrefixes []string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool) {
+func (c *ConfigStore) LoadEnv(envPrefixes []string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool) {
 	waitGroup := &sync.WaitGroup{}
 	for _, envVar := range os.Environ() {
 		waitGroup.Add(1)
 		go func(rawVar string) {
 			defer waitGroup.Done()
-
-			println("checking env var: " + rawVar)
-
 			if envPrefix, ok := checkHasPrefix(rawVar, envPrefixes); !ok {
 				return
 			} else {
@@ -167,7 +164,7 @@ func readFromFile(filePath string) (string, error) {
 	return strings.Trim(buffer.String(), "\r\n"), nil
 }
 
-func (c *Config) LoadFile(path string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool) {
+func (c *ConfigStore) LoadFile(path string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool) {
 	file, err := os.Open(path)
 	if err != nil {
 		errChan <- err

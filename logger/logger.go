@@ -45,16 +45,16 @@ var (
 )
 
 type Logger struct {
-	config  *config.Config
+	config  config.Config
 	logger  *log.Logger
 	logFile *LogFile
 }
 
-func GetDefaultConfig() *config.Config {
+func GetDefaultConfig() config.Config {
 	return config.NewConfigWithInitialValues(defaultLogConfig)
 }
 
-func SetDefaultConfig(cnf *config.Config) error {
+func SetDefaultConfig(cnf config.Config) error {
 	if err := cnf.CompareDefault(defaultLogConfig); err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func SetDefaultConfig(cnf *config.Config) error {
 	return nil
 }
 
-func NewLogger(configOptions *config.Config) (*Logger, error) {
+func NewLogger(configOptions config.Config) (*Logger, error) {
 	cfg := config.NewConfigWithInitialValues(defaultLogConfig)
 	if err := cfg.Merge(configOptions, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
@@ -115,7 +115,7 @@ func (l *Logger) Shutdown() error {
 	return nil
 }
 
-func (l *Logger) UpdateLogger(config *config.Config) error {
+func (l *Logger) UpdateLogger(config config.Config) error {
 	if err := l.config.Merge(config, true); err != nil {
 		return err
 	}

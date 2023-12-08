@@ -26,10 +26,10 @@ var (
 
 type LogFile struct {
 	file   *os.File
-	config *config.Config
+	config config.Config
 }
 
-func NewLogFile(options *config.Config) (*LogFile, error) {
+func NewLogFile(options config.Config) (*LogFile, error) {
 	cfg := config.NewConfigWithInitialValues(defaultLogFileConfig)
 	if err := cfg.Merge(options, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
@@ -136,7 +136,7 @@ func (l *LogFile) Sync() error {
 	return l.file.Sync()
 }
 
-func (l *LogFile) UpdateConfig(options *config.Config) error {
+func (l *LogFile) UpdateConfig(options config.Config) error {
 	if err := l.config.Merge(options, true); err != nil {
 		return err
 	}

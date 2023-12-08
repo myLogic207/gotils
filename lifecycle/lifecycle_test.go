@@ -33,7 +33,7 @@ type TestSystem struct {
 	val         interface{}
 }
 
-func (t *TestSystem) Init(ctx context.Context, cfg *config.Config) error {
+func (t *TestSystem) Init(ctx context.Context, cfg config.Config) error {
 	log.Println("Initializing Test Stub")
 
 	testVal, err := cfg.Get("TESTKEY")

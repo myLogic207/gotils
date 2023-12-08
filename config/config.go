@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -13,21 +14,42 @@ const (
 	KEY_ALLOWED_CHARS     = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 )
 
+type Config interface {
+	Has(key string) bool
+	Get(key string) (interface{}, error)
+	GetInt(key string) (int, error)
+	GetString(key string) (string, error)
+	GetBool(key string) (bool, error)
+	GetFloat(key string) (float64, error)
+	GetConfig(key string) (Config, error)
+	GetDuration(key string) (time.Duration, error)
+	Set(key string, value interface{}, force bool) error
+	CompareDefault(cmp map[string]interface{}) error
+	Compare(cmp Config, valueCompare bool) error
+	Merge(merger Config, overwrite bool) error
+	Copy() Config
+	Keys() []string
+	GetMap() map[string]interface{}
+	Sprint() string
+	DumpToFile(format string, outFile string) error
+}
+
 // config is an infinitely nested tree of Entries defined above
 // keys are strings, ints, floats, or bools, arrays of these types, or maps(named) of these types
-type Config struct {
+type ConfigStore struct {
 	sync.RWMutex
+	Config
 	store map[string]interface{}
 }
 
-func NewConfig() *Config {
-	config := Config{
+func NewConfig() *ConfigStore {
+	config := ConfigStore{
 		store: make(map[string]interface{}),
 	}
 	return &config
 }
 
-func NewConfigWithInitialValues(initialValues map[string]interface{}) *Config {
+func NewConfigWithInitialValues(initialValues map[string]interface{}) *ConfigStore {
 	config := NewConfig()
 	for key, val := range flattenMap(initialValues) {
 		config.Set(key, val, true)
@@ -128,7 +150,7 @@ func checkSegment(segment string) error {
 	return nil
 }
 
-func (c *Config) Has(key string) bool {
+func (c *ConfigStore) Has(key string) bool {
 	key = strings.TrimSpace(key)
 	key = strings.ToUpper(key)
 	if err := isKeyValid(key); err != nil { // check key is valid
@@ -144,7 +166,7 @@ func (c *Config) Has(key string) bool {
 	return false
 }
 
-func (c *Config) Get(key string) (interface{}, error) {
+func (c *ConfigStore) Get(key string) (interface{}, error) {
 	key = strings.TrimSpace(key)
 	key = strings.ToUpper(key)
 	if err := isKeyValid(key); err != nil { // check key is valid
@@ -160,7 +182,7 @@ func (c *Config) Get(key string) (interface{}, error) {
 	return nestStore(matchedValues), nil
 }
 
-func (c *Config) getMatching(key string) map[string]interface{} {
+func (c *ConfigStore) getMatching(key string) map[string]interface{} {
 	values := make(map[string]interface{})
 	c.RLock()
 	defer c.RUnlock()
@@ -182,12 +204,12 @@ func (c *Config) getMatching(key string) map[string]interface{} {
 	return values
 }
 
-func (c *Config) Set(key string, value interface{}, force bool) error {
+func (c *ConfigStore) Set(key string, value interface{}, force bool) error {
 	key = strings.TrimSpace(key)
 	key = strings.ToUpper(key)
 	var flatMapVal map[string]interface{}
 	switch entry := value.(type) {
-	case *Config:
+	case *ConfigStore:
 		flatMapVal = entry.copyStore()
 	case map[string]interface{}:
 		flatMapVal = flattenMap(entry)
@@ -219,7 +241,7 @@ func (c *Config) Set(key string, value interface{}, force bool) error {
 }
 
 // set is used to directly set a key in the config store, without checking for validity
-func (c *Config) set(key string, value interface{}) {
+func (c *ConfigStore) set(key string, value interface{}) {
 	c.Lock()
 	defer c.Unlock()
 	if value == nil {
@@ -231,7 +253,7 @@ func (c *Config) set(key string, value interface{}) {
 	}
 }
 
-func (c *Config) CompareDefault(cmp map[string]interface{}) error {
+func (c *ConfigStore) CompareDefault(cmp map[string]interface{}) error {
 	flatCmp := flattenMap(cmp)
 	errChan := make(chan error, len(flatCmp))
 	go c.compare(flatCmp, false, errChan)
@@ -240,10 +262,8 @@ func (c *Config) CompareDefault(cmp map[string]interface{}) error {
 
 // check if base config has all keys defined in cmp
 // if firstError is true, return first error encountered
-func (c *Config) Compare(cmp *Config, valueCompare bool) error {
-	cmp.Lock()
-	defer cmp.Unlock()
-	cmpMap := flattenMap(cmp.store)
+func (c *ConfigStore) Compare(cmp Config, valueCompare bool) error {
+	cmpMap := flattenMap(cmp.GetMap())
 
 	errChan := make(chan error, len(cmpMap))
 	// check if all keys in cmp are in base
@@ -256,7 +276,7 @@ func (c *Config) Compare(cmp *Config, valueCompare bool) error {
 // recursive compare finds all keys in cmp and checks if they are in base
 // reports all keys in cmp that are not in base as err to errChan
 // terminates when terminationStream is closed
-func (c *Config) compare(cmpMap map[string]interface{}, valueCompare bool, errChan chan<- error) {
+func (c *ConfigStore) compare(cmpMap map[string]interface{}, valueCompare bool, errChan chan<- error) {
 	waitGroup := &sync.WaitGroup{}
 	for key := range cmpMap {
 		waitGroup.Add(1)
@@ -284,10 +304,8 @@ func handleFinishStream(errChan <-chan error) error {
 	return nil
 }
 
-func (c *Config) Merge(merger *Config, overwrite bool) error {
-	merger.RLock()
-	defer merger.RUnlock()
-	for key, value := range merger.store {
+func (c *ConfigStore) Merge(merger Config, overwrite bool) error {
+	for key, value := range merger.GetMap() {
 		if c.Has(key) && !overwrite {
 			return &ErrKeyInStore{key: key}
 		}
@@ -296,12 +314,12 @@ func (c *Config) Merge(merger *Config, overwrite bool) error {
 	return nil
 }
 
-func (c *Config) Copy() *Config {
+func (c *ConfigStore) Copy() Config {
 	storeCopy := c.copyStore()
 	return NewConfigWithInitialValues(storeCopy)
 }
 
-func (c *Config) copyStore() map[string]interface{} {
+func (c *ConfigStore) copyStore() map[string]interface{} {
 	mapCopy := make(map[string]interface{})
 	for key, value := range c.store {
 		mapCopy[key] = value
@@ -309,7 +327,7 @@ func (c *Config) copyStore() map[string]interface{} {
 	return mapCopy
 }
 
-func (c *Config) Keys() []string {
+func (c *ConfigStore) Keys() []string {
 	keys := []string{}
 	for key := range c.store {
 		keys = append(keys, key)
@@ -317,11 +335,11 @@ func (c *Config) Keys() []string {
 	return keys
 }
 
-func (c *Config) GetMap() map[string]interface{} {
-	return nil
+func (c *ConfigStore) GetMap() map[string]interface{} {
+	return c.copyStore()
 }
 
-func (c *Config) toEnv() string {
+func (c *ConfigStore) toEnv() string {
 	var buffer []string
 	c.Lock()
 	for key, value := range c.store {
@@ -331,7 +349,7 @@ func (c *Config) toEnv() string {
 	return strings.Join(buffer, "\n")
 }
 
-func (c *Config) Sprint() string {
+func (c *ConfigStore) Sprint() string {
 	storeCopy := c.copyStore()
 	unflat := nestStore(storeCopy)
 	return nestedMapToString(unflat)
@@ -347,13 +365,13 @@ func nestedMapToString(m map[string]interface{}) string {
 				buffer.WriteString(fmt.Sprintf("\t%s\n", line))
 			}
 		default:
-			buffer.WriteString(fmt.Sprintf("%s: %v", key, value))
+			buffer.WriteString(fmt.Sprintf("%s: %v\n", key, value))
 		}
 	}
 	return buffer.String()
 }
 
-func (c *Config) DumpToFile(format string, outFile string) error {
+func (c *ConfigStore) DumpToFile(format string, outFile string) error {
 	file, err := os.OpenFile(outFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return &ErrDumpToFile{reason: err}

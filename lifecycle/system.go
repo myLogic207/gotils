@@ -13,7 +13,7 @@ var (
 )
 
 type SubSystem interface {
-	Init(context.Context, *config.Config) error
+	Init(context.Context, config.Config) error
 	Shutdown() error
 	// UpdateConfig(*config.Config) error
 }
