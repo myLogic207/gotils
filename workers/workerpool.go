@@ -38,36 +38,29 @@ func NewWorkerPool(ctx context.Context, size int, logger *log.Logger) (*WorkerPo
 func (w *WorkerPool) stopOnCancel(ctx context.Context) {
 	<-ctx.Done()
 	w.logger.Warn("Stopping worker pool")
-	close(w.quit)
 	w.logger.Info("Awaiting worker pool to finish")
+	close(w.tasks)
 	w.logger.Debug(fmt.Sprintf("Tasks in queue: %d", len(w.tasks)))
 	w.waitGroup.Wait()
+	w.logger.Info("Worker pool finished")
 }
 
 func (w *WorkerPool) Add(task Task) {
 	w.logger.Debug(fmt.Sprintf("Received, task. Tasks in queue: %d", len(w.tasks)))
-	if w.quit == nil {
-		w.logger.Warn("Worker pool is not started, dropping task")
-		return
-	}
 	if len(w.tasks)-1 >= cap(w.tasks) {
-		w.logger.Warn("Worker pool is full, dropping task")
+		w.logger.Warn("Worker pool is full or closed, dropping task")
 		return
 	}
-	select {
-	case <-w.quit:
-		w.logger.Warn("Worker pool is closed, dropping task")
-	case w.tasks <- task:
-		w.logger.Info("Adding task to worker pool")
-		w.waitGroup.Add(1)
-	}
+	w.tasks <- task
+	w.logger.Info("Adding task to worker pool")
+	w.waitGroup.Add(1)
 }
 
 func (w *WorkerPool) worker(ctx context.Context) {
 	for {
 		select {
-		case <-w.quit:
-			w.logger.Debug("Worker received quit signal")
+		case <-ctx.Done():
+			w.logger.Debug("Worker %d received quit signal", ctx.Value(workerId).(int))
 			return
 		case task, ok := <-w.tasks:
 			if !ok {

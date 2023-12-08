@@ -19,14 +19,14 @@ var (
 		},
 	}
 	testTask = NewSimpleTask(func() error {
-		<-time.After(time.Duration(rand.Intn(30)) * time.Millisecond)
+		<-time.After(time.Duration(rand.Intn(100)) * time.Millisecond)
 		fmt.Println("Hello World")
 		return nil
 	})
 )
 
 func TestSimpleTaskExecution(t *testing.T) {
-	testCtx := context.Background()
+	testCtx, cancel := context.WithCancel(context.Background())
 	logger, err := log.NewLogger(config.NewConfigWithInitialValues(workerTestConfig))
 	if err != nil {
 		t.Log(err)
@@ -44,8 +44,9 @@ func TestSimpleTaskExecution(t *testing.T) {
 		workerPool.Add(testTask)
 	}
 
-	// allow the workers to finish
-	<-time.After(1 * time.Second)
-
+	cancel()
 	// workerPool.Stop()
+	// wait one second to make sure work is processed
+	<-time.After(100 * time.Millisecond)
+
 }
