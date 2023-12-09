@@ -66,11 +66,12 @@ func (w *WorkerPool) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if err := task.Do(ctx); err != nil {
-				w.logger.Error(ctx, err.Error())
-				task.OnError(err)
+			taskCtx := context.WithValue(ctx, workerId, ctx.Value(workerId).(int))
+			if err := task.Do(taskCtx); err != nil {
+				w.logger.Error(taskCtx, err.Error())
+				task.OnError(taskCtx, err)
 			} else {
-				task.OnFinish()
+				task.OnFinish(taskCtx)
 			}
 			w.waitGroup.Done()
 		}
@@ -78,9 +79,9 @@ func (w *WorkerPool) worker(ctx context.Context) {
 }
 
 type Task interface {
-	Do(ctx context.Context) error
-	OnFinish()
-	OnError(error)
+	Do(context.Context) error
+	OnFinish(context.Context)
+	OnError(context.Context, error)
 }
 
 type SimpleTask struct {
@@ -98,23 +99,23 @@ func (t *SimpleTask) Do(ctx context.Context) error {
 	return t.function()
 }
 
-func (t *SimpleTask) OnFinish() {
+func (t *SimpleTask) OnFinish(ctx context.Context) {
 }
 
-func (t *SimpleTask) OnError(err error) {
+func (t *SimpleTask) OnError(ctx context.Context, err error) {
 }
 
 type AdvancedTask struct {
-	function     func(...interface{}) error
-	callback     func(...interface{})
-	errorhandler func(error, ...interface{})
+	function     func(context.Context, ...interface{}) error
+	callback     func(context.Context, ...interface{})
+	errorhandler func(context.Context, error, ...interface{})
 	params       []interface{}
 }
 
 func NewAdvancedTask(
-	function func(...interface{}) error,
-	callback func(...interface{}),
-	errorhandler func(error, ...interface{}),
+	function func(context.Context, ...interface{}) error,
+	callback func(context.Context, ...interface{}),
+	errorhandler func(context.Context, error, ...interface{}),
 	params []interface{}) *AdvancedTask {
 	return &AdvancedTask{
 		params:       params,
@@ -124,14 +125,14 @@ func NewAdvancedTask(
 	}
 }
 
-func (t *AdvancedTask) Do() error {
-	return t.function(t.params...)
+func (t *AdvancedTask) Do(ctx context.Context) error {
+	return t.function(ctx, t.params...)
 }
 
-func (t *AdvancedTask) OnFinish() {
-	t.callback(t.params...)
+func (t *AdvancedTask) OnFinish(ctx context.Context) {
+	t.callback(ctx, t.params...)
 }
 
-func (t *AdvancedTask) OnError(err error) {
-	t.errorhandler(err, t.params...)
+func (t *AdvancedTask) OnError(ctx context.Context, err error) {
+	t.errorhandler(ctx, err, t.params...)
 }
