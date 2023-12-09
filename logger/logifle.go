@@ -2,6 +2,7 @@ package logger
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"strings"
@@ -126,7 +127,7 @@ func (l *LogFile) Close() error {
 		return err
 	}
 
-	if rotating, _ := l.config.GetBool("ROTATING"); rotating {
+	if rotating, _ := l.config.GetBool("ROTATING"); !rotating {
 		return l.file.Close()
 	}
 
@@ -171,13 +172,34 @@ func (l *LogFile) rotate(oldName string, regenerate bool) error {
 		return errors.Join(ErrRotateFile, err)
 	}
 
-	if _, err := os.Stat(rotateName); !os.IsNotExist(err) {
+	if _, err := os.Stat(rotateName); err != nil && !os.IsNotExist(err) {
 		return errors.Join(ErrRotateFile, ErrFileInUse, err)
+	} else if err == nil {
+		// if rotate file exists, append number
+		for i := 0; i < 100; i++ {
+			suffix, _ := l.config.GetString("SUFFIX")
+			newName := ""
+			if index := strings.LastIndex(rotateName, suffix); index > -1 {
+				newName = rotateName[:index-1]
+			} else {
+				newName = rotateName
+			}
+
+			newName = fmt.Sprintf("%s.%d.%s", newName, i, suffix)
+			if _, err := os.Stat(newName); err != nil && !os.IsNotExist(err) {
+				return errors.Join(ErrRotateFile, ErrFileInUse, err)
+			} else if err == nil {
+				continue
+			}
+			rotateName = newName
+			break
+		}
 	}
 
 	if err := os.Rename(oldNameFull, rotateName); err != nil {
 		return err
 	}
+
 	if regenerate {
 		return l.generateLogFile()
 	}

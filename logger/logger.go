@@ -1,12 +1,14 @@
 package logger
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/myLogic207/gotils/config"
 )
@@ -45,7 +47,19 @@ var (
 	}
 )
 
-type Logger struct {
+type Logger interface {
+	Shutdown() error
+	UpdateLogger(config config.Config) error
+	LogMode(LogLevel) Logger
+	Debug(ctx context.Context, msg string, args ...interface{})
+	Info(ctx context.Context, msg string, args ...interface{})
+	Warn(ctx context.Context, msg string, args ...interface{})
+	Error(ctx context.Context, msg string, args ...interface{})
+	// Trace for SQL/GORM
+	Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error)
+}
+
+type logger struct {
 	config  config.Config
 	logger  *log.Logger
 	logFile *LogFile
@@ -68,7 +82,7 @@ func SetDefaultConfig(cnf config.Config) error {
 	return nil
 }
 
-func NewLogger(configOptions config.Config) (*Logger, error) {
+func NewLogger(configOptions config.Config) (Logger, error) {
 	cfg := config.NewConfigWithInitialValues(defaultLogConfig)
 	if err := cfg.Merge(configOptions, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
@@ -78,7 +92,7 @@ func NewLogger(configOptions config.Config) (*Logger, error) {
 	}
 
 	cfg.Sprint()
-	wrapper := &Logger{
+	wrapper := &logger{
 		config: cfg,
 		logger: nil,
 	}
@@ -91,7 +105,7 @@ func NewLogger(configOptions config.Config) (*Logger, error) {
 	return wrapper, nil
 }
 
-func (l *Logger) parseLogLevel() error {
+func (l *logger) parseLogLevel() error {
 	rawLogLevel, _ := l.config.GetString("LEVEL")
 	logLevel, err := resolveLogLevel(rawLogLevel)
 	if err != nil {
@@ -103,7 +117,7 @@ func (l *Logger) parseLogLevel() error {
 	return nil
 }
 
-func (l *Logger) Shutdown() error {
+func (l *logger) Shutdown() error {
 	println("Shutting down logger")
 	if logToFile, _ := l.config.GetBool("WRITERS/FILE/ACTIVE"); logToFile {
 		if err := l.logFile.Close(); err != nil {
@@ -116,7 +130,8 @@ func (l *Logger) Shutdown() error {
 	return nil
 }
 
-func (l *Logger) UpdateLogger(config config.Config) error {
+func (l *logger) UpdateLogger(config config.Config) error {
+	currentConfig := l.config.Copy()
 	if err := l.config.Merge(config, true); err != nil {
 		return err
 	}
@@ -124,10 +139,12 @@ func (l *Logger) UpdateLogger(config config.Config) error {
 		return err
 	}
 
-	if err := l.Shutdown(); err != nil {
-		return err
+	if ok, _ := currentConfig.GetBool("WRITERS/FILE/ACTIVE"); ok {
+		if err := l.logFile.Close(); err != nil {
+			return err
+		}
+		l.logFile = nil
 	}
-
 	if err := l.setLogger(); err != nil {
 		return err
 	}
@@ -135,7 +152,11 @@ func (l *Logger) UpdateLogger(config config.Config) error {
 	return nil
 }
 
-func (l *Logger) setLogger() error {
+func (l *logger) LogMode(LogLevel) Logger {
+	return l
+}
+
+func (l *logger) setLogger() error {
 	if err := l.parseLogLevel(); err != nil {
 		return err
 	}
@@ -155,7 +176,7 @@ func (l *Logger) setLogger() error {
 	return nil
 }
 
-func (l *Logger) generateWriter() (io.Writer, error) {
+func (l *logger) generateWriter() (io.Writer, error) {
 	var writers []io.Writer
 	if ok, _ := l.config.GetBool("WRITERS/STDOUT"); ok {
 		writers = append(writers, os.Stdout)
@@ -165,13 +186,14 @@ func (l *Logger) generateWriter() (io.Writer, error) {
 	if err != nil && !errors.Is(err, ErrFileNotActive) {
 		return nil, errors.Join(ErrOpenLogFile, err)
 	} else if err == nil && file != nil {
+		l.logFile = file
 		writers = append(writers, file)
 	}
 
 	return io.MultiWriter(writers...), nil
 }
 
-func (l *Logger) getLogFile() (*LogFile, error) {
+func (l *logger) getLogFile() (*LogFile, error) {
 	fileActive, _ := l.config.GetBool("WRITERS/FILE/ACTIVE")
 	if !fileActive {
 		return nil, ErrFileNotActive
@@ -219,7 +241,7 @@ func formatPrefix(rawPrefix string, prefixLength int, replaceChar rune) string {
 	return prefix
 }
 
-func (l *Logger) Logf(level LogLevel, msg string, args ...any) {
+func (l *logger) Logf(level LogLevel, msg string, args ...any) {
 	loggerLevel, _ := l.config.Get("LEVEL")
 	if loggerLevel.(LogLevel) > level {
 		return
@@ -230,18 +252,22 @@ func (l *Logger) Logf(level LogLevel, msg string, args ...any) {
 	}
 }
 
-func (l *Logger) Info(msg string, args ...any) {
+func (l *logger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
+	l.Logf(LevelInfo, "SQL Trace (starting: %s): %s", begin.String(), err)
+}
+
+func (l *logger) Info(ctx context.Context, msg string, args ...any) {
 	l.Logf(LevelInfo, msg, args...)
 }
 
-func (l *Logger) Debug(msg string, args ...any) {
+func (l *logger) Debug(ctx context.Context, msg string, args ...any) {
 	l.Logf(LevelDebug, msg, args...)
 }
 
-func (l *Logger) Warn(msg string, args ...any) {
+func (l *logger) Warn(ctx context.Context, msg string, args ...any) {
 	l.Logf(LevelWarn, msg, args...)
 }
 
-func (l *Logger) Error(msg string, args ...any) {
+func (l *logger) Error(ctx context.Context, msg string, args ...any) {
 	l.Logf(LevelError, msg, args...)
 }

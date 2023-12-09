@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"os"
 	"path"
 	"strings"
@@ -38,19 +39,19 @@ func TestLogToFile(t *testing.T) {
 	})
 
 	logger, err := NewLogger(loggerConfig)
-	if err != nil || logger == nil || logger.logger == nil {
+	if err != nil || logger == nil {
 		t.Errorf("Error registering logger:\n %v", err)
 		t.FailNow()
 	}
 
-	// t.Cleanup(func() {
-	// 	// remove log file folder
-	// 	if err := os.RemoveAll(logDir); err != nil {
-	// 		t.Errorf("Error removing log file: %v", err)
-	// 	}
-	// })
+	t.Cleanup(func() {
+		// remove log file folder
+		if err := os.RemoveAll(logDir); err != nil {
+			t.Errorf("Error removing log file: %v", err)
+		}
+	})
 
-	logger.Info(logMessage)
+	logger.Info(context.TODO(), logMessage)
 
 	<-time.After(100 * time.Millisecond)
 
@@ -103,10 +104,10 @@ func TestLogFileRotate(t *testing.T) {
 
 	logger, err := NewLogger(loggerConf)
 	if err != nil {
-		t.Errorf("Error registering logger: %v", err)
+		t.Error(nil, "Error registering logger: %v", err)
 		t.FailNow()
 	}
-	logger.Info("This is a test log message")
+	logger.Info(context.TODO(), "This is a test log message")
 	pwd, _ := os.Getwd()
 	filePath := path.Join(pwd, "test-logs", "test.log")
 
@@ -116,6 +117,11 @@ func TestLogFileRotate(t *testing.T) {
 	}
 
 	t.Log("All good so far, closing logger and awaiting rotation")
+
+	if err := logger.Shutdown(); err != nil {
+		t.Errorf("Error shutting down logger: %v", err)
+		t.FailNow()
+	}
 
 	newFileName := path.Join(pwd, "test-logs", "test.test.log")
 	// test if file is rotate

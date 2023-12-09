@@ -42,7 +42,7 @@ func TestSimpleTaskExecution(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		workerPool.Add(testTask)
+		workerPool.Add(testCtx, testTask)
 	}
 
 	cancel()
