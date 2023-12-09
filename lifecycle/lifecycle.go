@@ -55,7 +55,7 @@ func CatchInterrupt(cancel context.CancelFunc) {
 // it also registers a shutdown hook that cancels the context
 type Initializer struct {
 	initialized bool
-	logger      *log.Logger
+	logger      log.Logger
 	systems     map[string]SubSystem
 	configTree  config.Config
 }
@@ -82,7 +82,7 @@ func NewInitializer(ctx context.Context, options config.Config) (*Initializer, e
 	return initSystem, nil
 }
 
-func (i *Initializer) AddSystem(name string, system interface{}, configOptions config.Config) error {
+func (i *Initializer) AddSystem(ctx context.Context, name string, system interface{}, configOptions config.Config) error {
 	validSystem, ok := system.(SubSystem)
 	if !ok {
 		return ErrInvalidSystem
@@ -90,7 +90,7 @@ func (i *Initializer) AddSystem(name string, system interface{}, configOptions c
 	if _, ok := i.systems[name]; ok {
 		return ErrSystemRegistered
 	}
-	i.logger.Info("Adding system: %s", name)
+	i.logger.Info(ctx, "Adding system: %s", name)
 	systemWrapper, err := NewSystemWrapper(name, validSystem)
 	if err != nil {
 		return ErrWrappingSystem
@@ -100,7 +100,7 @@ func (i *Initializer) AddSystem(name string, system interface{}, configOptions c
 		return errors.Join(ErrInitConfig, err)
 	}
 	i.systems[name] = systemWrapper
-	i.logger.Debug("System added: %s", name)
+	i.logger.Debug(ctx, "System added: %s", name)
 	return nil
 }
 
@@ -113,11 +113,15 @@ func (i *Initializer) GetSubSystems() map[string]interface{} {
 }
 
 // Removes a system from the initializer, does not shutdown the system
-func (i *Initializer) RemoveSystem(name string) error {
+func (i *Initializer) RemoveSystem(ctx context.Context, name string) error {
 	if _, ok := i.systems[name]; !ok {
 		return ErrNoSystem
 	}
-	i.logger.Info("Removing system %s", name)
+	i.logger.Info(ctx, "Removing system %s", name)
+	system := i.systems[name]
+	if err := system.Shutdown(); err != nil {
+		return err
+	}
 	delete(i.systems, name)
 	return nil
 }
@@ -131,12 +135,12 @@ func (i *Initializer) Init(ctx context.Context, envPrefixes []string) error {
 	}
 	i.initialized = true
 
-	i.logger.Info("Initializing system")
+	i.logger.Info(ctx, "Initializing system")
 	loadedOptions, err := config.LoadConfig(ctx, envPrefixes, nil, false)
 	if err != nil && !errors.Is(err, config.ErrNoConfigSource) {
 		return err
 	} else if errors.Is(err, config.ErrNoConfigSource) {
-		i.logger.Warn("No config source found")
+		i.logger.Warn(ctx, "No config source found")
 	} else if err := i.configTree.Merge(loadedOptions, true); err != nil {
 		return errors.Join(ErrInitConfig, err)
 	}
@@ -158,12 +162,12 @@ func (i *Initializer) unrestrictedInit(ctx context.Context) error {
 
 	for systemName, subSystem := range i.systems {
 		waitGroup.Add(1)
-		i.logger.Info("Initializing %s", systemName)
+		i.logger.Info(ctx, "Initializing %s", systemName)
 		systemConfig, err := systemConfig.GetConfig(systemName)
 		if err != nil || systemConfig == nil {
 			return errors.Join(ErrInitConfig, err)
 		}
-		i.logger.Info("Config loaded")
+		i.logger.Info(ctx, "Config loaded")
 		go func(system SubSystem, c config.Config) {
 			errChan <- system.Init(ctx, c)
 			waitGroup.Done()
@@ -176,16 +180,16 @@ func (i *Initializer) unrestrictedInit(ctx context.Context) error {
 		close(errChan)
 	}()
 
-	return i.handleFinishStream(errChan, finishChan)
+	return i.handleFinishStream(ctx, errChan, finishChan)
 }
 
-func (i *Initializer) Shutdown() error {
+func (i *Initializer) Shutdown(ctx context.Context) error {
 	waitGroup := sync.WaitGroup{}
 	errChan := make(chan error)
 	finishChan := make(chan bool)
 
 	for name, system := range i.systems {
-		i.logger.Info("Shutting down %s", name)
+		i.logger.Info(ctx, "Shutting down %s", name)
 		waitGroup.Add(1)
 		go func(s SubSystem) {
 			errChan <- s.Shutdown()
@@ -199,24 +203,27 @@ func (i *Initializer) Shutdown() error {
 		close(errChan)
 	}()
 
-	return i.handleFinishStream(errChan, finishChan)
+	return i.handleFinishStream(ctx, errChan, finishChan)
 }
 
-func (i *Initializer) handleFinishStream(errChan <-chan error, finished <-chan bool) error {
+func (i *Initializer) handleFinishStream(ctx context.Context, errChan <-chan error, finished <-chan bool) error {
 	timeout, _ := i.configTree.GetDuration("TIMEOUT")
 	var joinedErr error
 	for {
 		select {
+		case <-ctx.Done():
+			i.logger.Warn(ctx, "Context cancelled")
+			return ErrClosedBeforeInit
 		case <-time.After(timeout):
-			i.logger.Warn("Operation timed out")
+			i.logger.Warn(ctx, "Operation timed out")
 			return ErrTimeout
 		case err := <-errChan:
 			if err != nil {
-				i.logger.Error("Error received: %s", err.Error())
+				i.logger.Error(ctx, "Error received: %s", err.Error())
 				joinedErr = errors.Join(joinedErr, err)
 			}
 		case <-finished:
-			i.logger.Info("Finished")
+			i.logger.Info(ctx, "Finished")
 			return joinedErr
 		}
 	}

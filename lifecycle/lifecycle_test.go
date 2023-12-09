@@ -94,7 +94,7 @@ func TestSimpleLifecycle(t *testing.T) {
 		t.FailNow()
 	}
 	testSystem := &TestSystem{}
-	if err := initSystem.AddSystem("TEST", testSystem, config.NewConfigWithInitialValues(testSystemConfig)); err != nil {
+	if err := initSystem.AddSystem(ctx, "TEST", testSystem, config.NewConfigWithInitialValues(testSystemConfig)); err != nil {
 		t.Log(err)
 		t.Error("Initializer is not adding systems correctly")
 		t.FailNow()
@@ -119,7 +119,7 @@ func TestSimpleLifecycle(t *testing.T) {
 	}
 
 	t.Log("Shutting down")
-	if err := initSystem.Shutdown(); err != nil {
+	if err := initSystem.Shutdown(ctx); err != nil {
 		t.Log(err)
 		t.Error("Initializer is not shutting down correctly")
 		t.FailNow()
