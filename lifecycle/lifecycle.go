@@ -61,7 +61,7 @@ type Initializer struct {
 }
 
 func NewInitializer(ctx context.Context, options config.Config) (*Initializer, error) {
-	cfg := config.NewConfigWithInitialValues(defaultConfig)
+	cfg := config.NewWithInitialValues(defaultConfig)
 	cfg.Merge(options, true)
 	if err := cfg.CompareDefault(defaultConfig); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)

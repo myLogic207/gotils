@@ -32,7 +32,7 @@ type LogFile struct {
 }
 
 func NewLogFile(options config.Config) (*LogFile, error) {
-	cfg := config.NewConfigWithInitialValues(defaultLogFileConfig)
+	cfg := config.NewWithInitialValues(defaultLogFileConfig)
 	if err := cfg.Merge(options, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}

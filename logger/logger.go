@@ -66,7 +66,7 @@ type logger struct {
 }
 
 func GetDefaultConfig() config.Config {
-	return config.NewConfigWithInitialValues(defaultLogConfig)
+	return config.NewWithInitialValues(defaultLogConfig)
 }
 
 func SetDefaultConfig(cnf config.Config) error {
@@ -83,7 +83,7 @@ func SetDefaultConfig(cnf config.Config) error {
 }
 
 func NewLogger(configOptions config.Config) (Logger, error) {
-	cfg := config.NewConfigWithInitialValues(defaultLogConfig)
+	cfg := config.NewWithInitialValues(defaultLogConfig)
 	if err := cfg.Merge(configOptions, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
@@ -152,7 +152,11 @@ func (l *logger) UpdateLogger(config config.Config) error {
 	return nil
 }
 
-func (l *logger) LogMode(LogLevel) Logger {
+func (l *logger) LogMode(level LogLevel) Logger {
+	if err := l.config.Set("LEVEL", level, true); err != nil {
+		println("Error setting log level:", err)
+	}
+
 	return l
 }
 

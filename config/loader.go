@@ -14,6 +14,11 @@ const (
 	ENV_SPLIT_CHAR = "_"
 )
 
+type ConfigLoader interface {
+	LoadEnv(envPrefixes []string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool)
+	LoadFile(path string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool)
+}
+
 var (
 	ErrNoConfigSource = errors.New("no config source provided")
 )
@@ -25,12 +30,12 @@ type Entry struct {
 
 // loads config from multiple sources
 // currently only supports env with single prefix, is wip
-func LoadConfig(ctx context.Context, envPrefixList []string, fileList []string, firstError bool) (*ConfigStore, error) {
+func LoadConfig(ctx context.Context, envPrefixList []string, fileList []string, firstError bool) (Config, error) {
 	if len(envPrefixList) == 0 && len(fileList) == 0 {
 		return nil, ErrNoConfigSource
 	}
 
-	config := NewConfig()
+	config := New()
 	errChan := make(chan error, 2)
 	entryChan := make(chan *Entry, 32)
 	finishChan := make(chan bool, 2)

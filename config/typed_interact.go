@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+type ConfigGetter interface {
+	GetInt(key string) (int, error)
+	GetString(key string) (string, error)
+	GetBool(key string) (bool, error)
+	GetFloat(key string) (float64, error)
+	GetConfig(key string) (Config, error)
+	GetDuration(key string) (time.Duration, error)
+}
+
 var (
 	ErrTypeMismatch = errors.New("type mismatch")
 )
@@ -127,9 +136,9 @@ func (c *ConfigStore) GetConfig(key string) (Config, error) {
 		return nil, err
 	}
 	if config, ok := entry.(map[string]interface{}); ok {
-		return NewConfigWithInitialValues(config), nil
+		return NewWithInitialValues(config), nil
 	}
-	return NewConfigWithInitialValues(map[string]interface{}{
+	return NewWithInitialValues(map[string]interface{}{
 		key: entry,
 	}), nil
 }

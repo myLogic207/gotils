@@ -105,22 +105,21 @@ func TestConfigWithFile(t *testing.T) {
 	testValue := "abcdefg1234567!"
 	t.Log("Testing Config Load with File")
 	if err := os.WriteFile("test_conf.env", []byte(testValue), 0644); err != nil {
-		t.Error("Failed to create test file")
-		t.FailNow()
+		t.Fatal("Failed to create test file")
 	}
 	os.Setenv("PATCHTESTCONF_SIMPLE_FILE", "test_conf.env")
 	// os.Setenv("PATCHTEST_MAP_FILE", "abcde")
 	config, err := LoadConfig(context.TODO(), []string{"PATCHTESTCONF"}, nil, true)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	t.Logf("Config:\n%v", config.Sprint())
 	if val, err := config.Get("SIMPLE"); err != nil || val.(string) != testValue {
-		t.Error("Config is not loaded correctly (level 1)")
+		t.Fatal("Config is not loaded correctly (level 1)")
 	}
 
 	if err := os.Remove("test_conf.env"); err != nil {
-		t.Error("Failed to remove test file")
+		t.Fatal("Failed to remove test file")
 	}
 }
 
@@ -132,7 +131,7 @@ func TestConfigWithInitialValue(t *testing.T) {
 	}
 	t.Log("Testing Config Load with Initial Values")
 	// config := NewConfig(initalValues, nil)
-	config := NewConfigWithInitialValues(initialValues)
+	config := NewWithInitialValues(initialValues)
 	if config == nil {
 		t.Error("Config is nil")
 	}
@@ -177,7 +176,7 @@ func TestConfigWithInitialValueMap(t *testing.T) {
 	}
 	t.Log("Testing Config Load with Initial Values")
 	// config := NewConfig(initalValues, nil)
-	config := NewConfigWithInitialValues(initialValues)
+	config := NewWithInitialValues(initialValues)
 	if config == nil {
 		t.Error("Config is nil")
 	}
@@ -206,13 +205,13 @@ func TestConfigEmptyMerge(t *testing.T) {
 	values := map[string]interface{}{
 		"val": "abcde",
 	}
-	config := NewConfigWithInitialValues(values)
+	config := NewWithInitialValues(values)
 	if val, err := config.GetString("val"); err != nil && val != "abcde" {
 		t.Log(err)
 		t.Error("Config is not loaded correctly (level 0)")
 	}
 
-	emptyEnvConfig := NewConfig()
+	emptyEnvConfig := New()
 	if emptyEnvConfig.Has("val") {
 		t.Error("Config is not empty")
 	}
@@ -242,8 +241,8 @@ func TestConfigMerge(t *testing.T) {
 			"number": 123456,
 		},
 	}
-	config := NewConfigWithInitialValues(initialValues)
-	configMerger := NewConfigWithInitialValues(initialValuesMergin)
+	config := NewWithInitialValues(initialValues)
+	configMerger := NewWithInitialValues(initialValuesMergin)
 
 	if val, err := config.Get("val"); err == nil && val != nil {
 		t.Log(err)
@@ -312,7 +311,7 @@ OTHERNEST/BOOLEAN=true
 OTHERNEST/NUMBER=123456
 OTHERNEST/TRIPPLENEST/STRING=nestedOther`
 
-	config := NewConfigWithInitialValues(initialValues)
+	config := NewWithInitialValues(initialValues)
 	if err := config.DumpToFile("env", "test_dump.env"); err != nil {
 		t.Error(err)
 		t.FailNow()
@@ -353,7 +352,7 @@ func TestCopy(t *testing.T) {
 			"number":  123456,
 		},
 	}
-	config := NewConfigWithInitialValues(initialValues)
+	config := NewWithInitialValues(initialValues)
 	t.Log("original:\n", config.Sprint())
 	copy := config.Copy()
 	t.Log("copy:\n", copy.Sprint())
@@ -415,7 +414,7 @@ func TestCopy(t *testing.T) {
 }
 
 func TestConfigCompare(t *testing.T) {
-	baseConfig := NewConfigWithInitialValues(map[string]interface{}{
+	baseConfig := NewWithInitialValues(map[string]interface{}{
 		"test":          "abcde",
 		"simple":        "test",
 		"nested/string": "nestedTestValue",
@@ -423,7 +422,7 @@ func TestConfigCompare(t *testing.T) {
 			"string": "nestedOther",
 		},
 	})
-	otherConfig := NewConfigWithInitialValues(map[string]interface{}{
+	otherConfig := NewWithInitialValues(map[string]interface{}{
 		"simple":        "test",
 		"nested/string": "nestedTestValue",
 	})

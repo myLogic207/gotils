@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -15,14 +14,10 @@ const (
 )
 
 type Config interface {
+	ConfigLoader
+	ConfigGetter
 	Has(key string) bool
 	Get(key string) (interface{}, error)
-	GetInt(key string) (int, error)
-	GetString(key string) (string, error)
-	GetBool(key string) (bool, error)
-	GetFloat(key string) (float64, error)
-	GetConfig(key string) (Config, error)
-	GetDuration(key string) (time.Duration, error)
 	Set(key string, value interface{}, force bool) error
 	CompareDefault(cmp map[string]interface{}) error
 	Compare(cmp Config, valueCompare bool) error
@@ -42,15 +37,15 @@ type ConfigStore struct {
 	store map[string]interface{}
 }
 
-func NewConfig() *ConfigStore {
+func New() Config {
 	config := ConfigStore{
 		store: make(map[string]interface{}),
 	}
 	return &config
 }
 
-func NewConfigWithInitialValues(initialValues map[string]interface{}) *ConfigStore {
-	config := NewConfig()
+func NewWithInitialValues(initialValues map[string]interface{}) Config {
+	config := New()
 	for key, val := range flattenMap(initialValues) {
 		config.Set(key, val, true)
 	}
@@ -316,7 +311,7 @@ func (c *ConfigStore) Merge(merger Config, overwrite bool) error {
 
 func (c *ConfigStore) Copy() Config {
 	storeCopy := c.copyStore()
-	return NewConfigWithInitialValues(storeCopy)
+	return NewWithInitialValues(storeCopy)
 }
 
 func (c *ConfigStore) copyStore() map[string]interface{} {

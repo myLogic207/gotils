@@ -28,7 +28,7 @@ var (
 
 func TestSimpleTaskExecution(t *testing.T) {
 	testCtx, cancel := context.WithCancel(context.Background())
-	logger, err := log.NewLogger(config.NewConfigWithInitialValues(workerTestConfig))
+	logger, err := log.NewLogger(config.NewWithInitialValues(workerTestConfig))
 	if err != nil {
 		t.Log(err)
 		t.Error("Logger is not creating correctly")

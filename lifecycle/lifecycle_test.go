@@ -63,7 +63,7 @@ func (t *TestSystem) TestVal() (interface{}, error) {
 
 func TestSystemSelfTest(t *testing.T) {
 	system := &TestSystem{}
-	if err := system.Init(context.Background(), config.NewConfigWithInitialValues(testSystemConfig)); err != nil {
+	if err := system.Init(context.Background(), config.NewWithInitialValues(testSystemConfig)); err != nil {
 		t.Log(err)
 		t.Error("Test system is not initializing correctly")
 		t.FailNow()
@@ -87,14 +87,14 @@ func TestSystemSelfTest(t *testing.T) {
 
 func TestSimpleLifecycle(t *testing.T) {
 	ctx := context.Background()
-	initSystem, err := NewInitializer(ctx, config.NewConfigWithInitialValues(testInitConfig))
+	initSystem, err := NewInitializer(ctx, config.NewWithInitialValues(testInitConfig))
 	if err != nil {
 		t.Log(err)
 		t.Error("Initializer is not creating correctly")
 		t.FailNow()
 	}
 	testSystem := &TestSystem{}
-	if err := initSystem.AddSystem(ctx, "TEST", testSystem, config.NewConfigWithInitialValues(testSystemConfig)); err != nil {
+	if err := initSystem.AddSystem(ctx, "TEST", testSystem, config.NewWithInitialValues(testSystemConfig)); err != nil {
 		t.Log(err)
 		t.Error("Initializer is not adding systems correctly")
 		t.FailNow()

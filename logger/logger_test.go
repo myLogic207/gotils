@@ -22,7 +22,7 @@ func TestLogToFile(t *testing.T) {
 	logFile = path.Join(cwd, logDir, logFile)
 	logMessage := "This is a test log message"
 	prefix := "test"
-	loggerConfig := config.NewConfigWithInitialValues(map[string]interface{}{
+	loggerConfig := config.NewWithInitialValues(map[string]interface{}{
 		"PREFIX":       prefix,
 		"PREFIXLENGTH": 6,
 		"LEVEL":        "DEBUG",
@@ -79,7 +79,7 @@ func TestLogToFile(t *testing.T) {
 }
 
 func TestLogFileRotate(t *testing.T) {
-	loggerConf := config.NewConfigWithInitialValues(map[string]interface{}{
+	loggerConf := config.NewWithInitialValues(map[string]interface{}{
 		"PREFIX":       "test",
 		"PREFIXLENGTH": 6,
 		"LEVEL":        "DEBUG",
