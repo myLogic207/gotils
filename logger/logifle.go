@@ -36,7 +36,7 @@ func NewLogFile(options config.Config) (*LogFile, error) {
 	if err := cfg.Merge(options, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
-	if err := cfg.CompareDefault(defaultLogFileConfig); err != nil {
+	if err := cfg.HasAllKeys(defaultLogFileConfig); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
 
@@ -69,10 +69,8 @@ func (l *LogFile) generateLogFile() error {
 	if formattedPath == "" {
 		return errors.New("path is empty")
 	}
-	println("Opening log file", formattedPath)
 	folder, _ := l.config.GetString("FOLDER")
 	formattedPath = path.Join(folder, formattedPath)
-	println("Opening log file", formattedPath)
 
 	if !path.IsAbs(formattedPath) {
 		cwd, err := os.Getwd()
@@ -81,7 +79,6 @@ func (l *LogFile) generateLogFile() error {
 		}
 		formattedPath = path.Join(cwd, formattedPath)
 	}
-	println("Opening log file", formattedPath)
 
 	dir := path.Dir(formattedPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -100,7 +97,7 @@ func (l *LogFile) generateLogFile() error {
 func (l *LogFile) prepExisting(filepath string) error {
 	info, err := os.Stat(filepath)
 	if err != nil && os.IsNotExist(err) {
-		println("File does not exist, all good")
+		// println("File does not exist, all good")
 		return nil
 	} else if err != nil {
 		println("Error checking file", err.Error())
@@ -109,7 +106,7 @@ func (l *LogFile) prepExisting(filepath string) error {
 		println("File is empty, removing")
 		return os.Remove(filepath)
 	} else if rotating, _ := l.config.GetBool("ROTATING"); rotating {
-		println("file exists, not empty but can rotate away")
+		println("file exists, not empty but allowed to rotate away")
 		if err := l.rotate(info.Name(), false); err != nil {
 			// just append anyways...
 			return nil
@@ -142,7 +139,7 @@ func (l *LogFile) UpdateConfig(options config.Config) error {
 	if err := l.config.Merge(options, true); err != nil {
 		return err
 	}
-	if err := l.config.CompareDefault(defaultLogConfig); err != nil {
+	if err := l.config.HasAllKeys(defaultLogConfig); err != nil {
 		return err
 	}
 	return nil

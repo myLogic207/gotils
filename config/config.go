@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -19,7 +21,7 @@ type Config interface {
 	Has(key string) bool
 	Get(key string) (interface{}, error)
 	Set(key string, value interface{}, force bool) error
-	CompareDefault(cmp map[string]interface{}) error
+	HasAllKeys(cmp map[string]interface{}) error
 	Compare(cmp Config, valueCompare bool) error
 	Merge(merger Config, overwrite bool) error
 	Copy() Config
@@ -248,11 +250,9 @@ func (c *ConfigStore) set(key string, value interface{}) {
 	}
 }
 
-func (c *ConfigStore) CompareDefault(cmp map[string]interface{}) error {
-	flatCmp := flattenMap(cmp)
-	errChan := make(chan error, len(flatCmp))
-	go c.compare(flatCmp, false, errChan)
-	return handleFinishStream(errChan)
+func (c *ConfigStore) HasAllKeys(cmp map[string]interface{}) error {
+	cmpMap := flattenMap(cmp)
+	return c.compare(cmpMap, false)
 }
 
 // check if base config has all keys defined in cmp
@@ -260,43 +260,32 @@ func (c *ConfigStore) CompareDefault(cmp map[string]interface{}) error {
 func (c *ConfigStore) Compare(cmp Config, valueCompare bool) error {
 	cmpMap := flattenMap(cmp.GetMap())
 
-	errChan := make(chan error, len(cmpMap))
 	// check if all keys in cmp are in base
-	go c.compare(cmpMap, valueCompare, errChan)
+	if err := c.compare(cmpMap, valueCompare); err != nil {
+		return err
+	}
 
-	// handle errors
-	return handleFinishStream(errChan)
+	return nil
 }
 
-// recursive compare finds all keys in cmp and checks if they are in base
-// reports all keys in cmp that are not in base as err to errChan
-// terminates when terminationStream is closed
-func (c *ConfigStore) compare(cmpMap map[string]interface{}, valueCompare bool, errChan chan<- error) {
-	waitGroup := &sync.WaitGroup{}
+// check if base config has all keys defined in cmp
+// if firstError is true, return first error encountered
+func (c *ConfigStore) compare(cmpMap map[string]interface{}, valueCompare bool) error {
+	errGroup := &errgroup.Group{}
 	for key := range cmpMap {
-		waitGroup.Add(1)
-		go func(key string) {
-			defer waitGroup.Done()
+		k := key
+		errGroup.Go(func() error {
 			c.RLock()
-			if c.store[key] == nil {
-				errChan <- &ErrKeyNotFound{key: key}
-			} else if valueCompare && c.store[key] != cmpMap[key] {
-				errChan <- &ErrValueInvalid{key: key, value: cmpMap[key]}
+			if c.store[k] == nil {
+				return &ErrKeyNotFound{key: k}
+			} else if valueCompare && c.store[k] != cmpMap[k] {
+				return &ErrValueInvalid{key: k, value: cmpMap[k]}
 			}
 			c.RUnlock()
-		}(key)
+			return nil
+		})
 	}
-	waitGroup.Wait()
-	close(errChan)
-}
-
-func handleFinishStream(errChan <-chan error) error {
-	for err, ok := <-errChan; ok; err, ok = <-errChan {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return errGroup.Wait()
 }
 
 func (c *ConfigStore) Merge(merger Config, overwrite bool) error {

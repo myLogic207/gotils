@@ -70,7 +70,7 @@ func GetDefaultConfig() config.Config {
 }
 
 func SetDefaultConfig(cnf config.Config) error {
-	if err := cnf.CompareDefault(defaultLogConfig); err != nil {
+	if err := cnf.HasAllKeys(defaultLogConfig); err != nil {
 		return err
 	}
 
@@ -87,7 +87,7 @@ func NewLogger(configOptions config.Config) (Logger, error) {
 	if err := cfg.Merge(configOptions, true); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
-	if err := cfg.CompareDefault(defaultLogConfig); err != nil {
+	if err := cfg.HasAllKeys(defaultLogConfig); err != nil {
 		return nil, errors.Join(ErrInitConfig, err)
 	}
 
@@ -135,7 +135,7 @@ func (l *logger) UpdateLogger(config config.Config) error {
 	if err := l.config.Merge(config, true); err != nil {
 		return err
 	}
-	if err := l.config.CompareDefault(defaultLogConfig); err != nil {
+	if err := l.config.HasAllKeys(defaultLogConfig); err != nil {
 		return err
 	}
 
