@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +40,8 @@ func (c *ConfigStore) GetInt(key string) (int, error) {
 	}
 	if num, ok := entry.(int); ok {
 		return num, nil
+	} else if num, ok := entry.(string); ok {
+		return strconv.Atoi(num)
 	}
 	return 0, &ErrFieldNotInt{
 		key: key,
