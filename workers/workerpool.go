@@ -9,54 +9,64 @@ import (
 
 type contextKey string
 
+type WorkerPool interface {
+	Add(context.Context, Task) error
+	Execute(context.Context, Task)
+	Stop(context.Context)
+}
+
 var workerId = contextKey("worker_id")
 
-type WorkerPool struct {
+type WorkerPoolImpl struct {
 	logger    log.Logger
 	waitGroup sync.WaitGroup
-	quit      chan bool
 	tasks     chan Task
 }
 
-func NewWorkerPool(ctx context.Context, size int, logger log.Logger) (*WorkerPool, WorkerError) {
-	pool := &WorkerPool{
+func InitPool(ctx context.Context, size int, logger log.Logger) (WorkerPool, error) {
+	pool := &WorkerPoolImpl{
 		logger:    logger,
 		waitGroup: sync.WaitGroup{},
-		quit:      make(chan bool),
 		tasks:     make(chan Task, size),
 	}
-	pool.logger.Debug(ctx, "Creating worker pool with %d workers", size)
-	for i := 0; i < size; i++ {
-		workerCtx := context.WithValue(ctx, workerId, i)
-		go pool.worker(workerCtx)
-	}
-	go pool.stopOnCancel(ctx)
-	pool.logger.Debug(ctx, "Worker pool initialized")
+	pool.logger.Debug(ctx, "Worker pool created")
+	pool.logger.Debug(ctx, "Worker pool size: %d", size)
+	pool.Start(ctx, size)
 	return pool, nil
 }
 
-func (w *WorkerPool) stopOnCancel(ctx context.Context) {
-	<-ctx.Done()
+func (w *WorkerPoolImpl) Start(ctx context.Context, size int) {
+	w.logger.Info(ctx, "Starting worker pool")
+	for i := 0; i < size; i++ {
+		go w.worker(context.WithValue(ctx, workerId, i))
+	}
+	w.logger.Info(ctx, "Worker pool started")
+}
+
+func (w *WorkerPoolImpl) Stop(ctx context.Context) {
 	w.logger.Warn(ctx, "Stopping worker pool")
-	w.logger.Info(ctx, "Awaiting worker pool to finish")
 	close(w.tasks)
+	w.logger.Info(ctx, "Awaiting worker pool to finish")
 	w.logger.Debug(ctx, "Tasks in queue: %d", len(w.tasks))
 	w.waitGroup.Wait()
 	w.logger.Info(ctx, "Worker pool finished")
 }
 
-func (w *WorkerPool) Add(ctx context.Context, task Task) {
+func (w *WorkerPoolImpl) Add(ctx context.Context, task Task) error {
 	w.logger.Debug(ctx, "Received, task. Tasks in queue: %d", len(w.tasks))
 	if len(w.tasks)-1 >= cap(w.tasks) {
 		w.logger.Warn(ctx, "Worker pool is full or closed, dropping task")
-		return
+		return ErrWorkerPoolFull
 	}
 	w.tasks <- task
-	w.logger.Info(ctx, "Adding task to worker pool")
-	w.waitGroup.Add(1)
+	w.logger.Info(ctx, "Added task to worker pool")
+	return nil
 }
 
-func (w *WorkerPool) worker(ctx context.Context) {
+func (w *WorkerPoolImpl) worker(ctx context.Context) {
+	w.logger.Debug(ctx, "Worker %d started", ctx.Value(workerId).(int))
+	defer w.logger.Debug(ctx, "Worker %d stopped", ctx.Value(workerId).(int))
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -66,73 +76,20 @@ func (w *WorkerPool) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			taskCtx := context.WithValue(ctx, workerId, ctx.Value(workerId).(int))
-			if err := task.Do(taskCtx); err != nil {
-				w.logger.Error(taskCtx, err.Error())
-				task.OnError(taskCtx, err)
-			} else {
-				task.OnFinish(taskCtx)
-			}
+			w.waitGroup.Add(1)
+			w.Execute(ctx, task)
 			w.waitGroup.Done()
 		}
 	}
 }
 
-type Task interface {
-	Do(context.Context) error
-	OnFinish(context.Context)
-	OnError(context.Context, error)
-}
-
-type SimpleTask struct {
-	Task
-	function func() error
-}
-
-func NewSimpleTask(function func() error) *SimpleTask {
-	return &SimpleTask{
-		function: function,
+func (w *WorkerPoolImpl) Execute(ctx context.Context, task Task) {
+	taskCtx, cancel := context.WithCancel(ctx)
+	w.logger.Debug(taskCtx, "Worker %d received task", ctx.Value(workerId).(int))
+	err := task.Do(taskCtx)
+	if err != nil {
+		w.logger.Error(taskCtx, err.Error())
 	}
-}
-
-func (t *SimpleTask) Do(ctx context.Context) error {
-	return t.function()
-}
-
-func (t *SimpleTask) OnFinish(ctx context.Context) {
-}
-
-func (t *SimpleTask) OnError(ctx context.Context, err error) {
-}
-
-type AdvancedTask struct {
-	function     func(context.Context, ...interface{}) error
-	callback     func(context.Context, ...interface{})
-	errorhandler func(context.Context, error, ...interface{})
-	params       []interface{}
-}
-
-func NewAdvancedTask(
-	function func(context.Context, ...interface{}) error,
-	callback func(context.Context, ...interface{}),
-	errorhandler func(context.Context, error, ...interface{}),
-	params []interface{}) *AdvancedTask {
-	return &AdvancedTask{
-		params:       params,
-		function:     function,
-		callback:     callback,
-		errorhandler: errorhandler,
-	}
-}
-
-func (t *AdvancedTask) Do(ctx context.Context) error {
-	return t.function(ctx, t.params...)
-}
-
-func (t *AdvancedTask) OnFinish(ctx context.Context) {
-	t.callback(ctx, t.params...)
-}
-
-func (t *AdvancedTask) OnError(ctx context.Context, err error) {
-	t.errorhandler(ctx, err, t.params...)
+	task.OnFinish(taskCtx, err)
+	cancel()
 }

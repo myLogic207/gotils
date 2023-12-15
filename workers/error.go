@@ -4,6 +4,7 @@ import "errors"
 
 var (
 	ErrInitWorkerPool = errors.New("worker pool is not initialized")
+	ErrWorkerPoolFull = errors.New("worker pool is full")
 )
 
 type WorkerError interface {

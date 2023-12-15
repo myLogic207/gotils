@@ -19,10 +19,15 @@ var (
 			"PREFIX": "WORKERPOOL-TEST",
 		},
 	}
-	testTask = NewSimpleTask(func() error {
+	testTask = NewTask(func(context.Context) error {
 		<-time.After(time.Duration(rand.Intn(100)) * time.Millisecond)
 		fmt.Println("Hello World")
 		return nil
+	}, func(ctx context.Context, err error) {
+		fmt.Println("Task finished")
+		if err != nil {
+			fmt.Printf("Error: %s\n", err.Error())
+		}
 	})
 )
 
@@ -34,7 +39,7 @@ func TestSimpleTaskExecution(t *testing.T) {
 		t.Error("Logger is not creating correctly")
 		t.FailNow()
 	}
-	workerPool, err := NewWorkerPool(testCtx, workerTestConfig["WORKERS"].(int), logger)
+	workerPool, err := InitPool(testCtx, workerTestConfig["WORKERS"].(int), logger)
 	if err != nil {
 		t.Log(err)
 		t.Error("WorkerPool is not creating correctly")
@@ -45,9 +50,9 @@ func TestSimpleTaskExecution(t *testing.T) {
 		workerPool.Add(testCtx, testTask)
 	}
 
-	cancel()
-	// workerPool.Stop()
-	// wait one second to make sure work is processed
-	<-time.After(100 * time.Millisecond)
+	// Wait for some tasks to finish
+	// <-time.After(50 * time.Millisecond)
 
+	workerPool.Stop(testCtx)
+	cancel()
 }
