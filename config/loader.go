@@ -2,224 +2,180 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"errors"
-	"log"
 	"os"
 	"strings"
-	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
 	ENV_SPLIT_CHAR = "_"
+	ENTRY_SPLIT    = "="
 )
 
-type ConfigLoader interface {
-	LoadEnv(envPrefixes []string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool)
-	LoadFile(path string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool)
+type Loader interface {
+	LoadEnv(ctx context.Context, store ConfigStore, prefixList []string) error
+	LoadFile(ctx context.Context, store ConfigStore, paths []string) error
 }
 
-var (
-	ErrNoConfigSource = errors.New("no config source provided")
-)
+type ConfigLoader struct{}
 
-type Entry struct {
-	key   string
-	value interface{}
-}
+func (cl *ConfigLoader) LoadEnv(ctx context.Context, store ConfigStore, prefixList []string) error {
+	eg, eCtx := errgroup.WithContext(ctx)
 
-// loads config from multiple sources
-// currently only supports env with single prefix, is wip
-func LoadConfig(ctx context.Context, envPrefixList []string, fileList []string, firstError bool) (Config, error) {
-	if len(envPrefixList) == 0 && len(fileList) == 0 {
-		return nil, ErrNoConfigSource
-	}
-
-	config := New()
-	errChan := make(chan error, 2)
-	entryChan := make(chan *Entry, 32)
-	finishChan := make(chan bool, 2)
-	// load from env
-	finishCounter := 0
-	if len(envPrefixList) != 0 {
-		go config.LoadEnv(envPrefixList, entryChan, errChan, finishChan)
-		finishCounter += 1
-	}
-	// load from file
-	if len(fileList) == 0 {
-		for _, file := range fileList {
-			go config.LoadFile(file, entryChan, errChan, finishChan)
-			finishCounter += 1
-		}
-	}
-	// handle finish
-	var joinedErr error
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case err := <-errChan:
-			if err != nil && firstError {
-				return nil, err
-			} else {
-				errors.Join(err, joinedErr)
-			}
-		case <-finishChan:
-			finishCounter--
-			if finishCounter == 0 {
-				close(errChan)
-				close(entryChan)
-				close(finishChan)
-				return config, joinedErr
-			}
-		case entry := <-entryChan:
-			if strings.HasSuffix(entry.key, CONFIG_TREE_SEPARATOR+"FILE") {
-				var err error
-				entry, err = handleFileEntry(entry)
-				if err != nil {
-					log.Println(err)
-				}
-			}
-			if err := config.Set(entry.key, entry.value, true); err != nil {
-				log.Println(err)
-			}
-		}
-	}
-}
-
-func (c *ConfigStore) LoadEnv(envPrefixes []string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool) {
-	waitGroup := &sync.WaitGroup{}
 	for _, envVar := range os.Environ() {
-		waitGroup.Add(1)
-		go func(rawVar string) {
-			defer waitGroup.Done()
-			if envPrefix, ok := checkHasPrefix(rawVar, envPrefixes); !ok {
-				return
-			} else {
-				rawVar = strings.TrimPrefix(rawVar, envPrefix+ENV_SPLIT_CHAR)
+		ev := envVar
+		eg.Go(func() error {
+			key, val, err := parseEnvVar(ev, prefixList)
+			if err != nil {
+				return &ErrParsingEnvVar{err}
 			}
-			if entry, err := parseEnvVar(rawVar); err != nil {
-				errChan <- err
-			} else if entry != nil {
-				entryChan <- entry
-			}
-		}(envVar)
+			return store.Set(eCtx, key, val, false)
+		})
 	}
-	waitGroup.Wait()
-	finishChan <- true
+
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func checkHasPrefix(envVar string, prefixes []string) (string, bool) {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(envVar, prefix+ENV_SPLIT_CHAR) {
-			return prefix, true
+func parseEnvVar(envVar string, prefixList []string) (string, string, error) {
+	var foundPrefix string
+	for _, prefix := range prefixList {
+		if !strings.HasPrefix(envVar, prefix) {
+			continue
+		} else {
+			// matching prefix found
+			foundPrefix = prefix
+			break
 		}
 	}
-	return "", false
+	if foundPrefix == "" {
+		return "", "", nil
+	}
+	return handleEntry(strings.TrimPrefix(envVar, foundPrefix+ENV_SPLIT_CHAR), ENTRY_SPLIT)
 }
 
-func parseEnvVar(envVar string) (*Entry, error) {
-	parts := strings.SplitN(envVar, "=", 2)
+func (cl *ConfigLoader) LoadFile(ctx context.Context, store ConfigStore, filePaths []string) error {
+	eg, eCtx := errgroup.WithContext(ctx)
+	for _, filePath := range filePaths {
+		fp := filePath
+		eg.Go(func() error {
+			return cl.loadFile(eCtx, eg, fp, store)
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (cl *ConfigLoader) loadFile(ctx context.Context, errGroup *errgroup.Group, filePath string, store ConfigStore) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line := scanner.Text()
+		errGroup.Go(func() error {
+			key, value, err := parseFileLine(line)
+			if err != nil {
+				return err
+			}
+			return store.Set(ctx, key, value, false)
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+
+}
+
+func parseFileLine(line string) (string, string, error) {
+	if strings.HasPrefix(line, "#") {
+		return "", "", nil
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	var split string
+	if strings.Contains(line, ENTRY_SPLIT) {
+		split = ENTRY_SPLIT
+	} else if strings.Contains(line, ": ") {
+		split = ": "
+	} else {
+		return "", "", &ErrKeyValueInvalid{
+			key: line,
+		}
+	}
+	return handleEntry(line, split)
+}
+
+func handleEntry(rawString string, split string) (string, string, error) {
+	parts := strings.SplitN(rawString, split, 2)
 	if len(parts) != 2 {
-		return nil, &ErrValueInvalid{
-			value: envVar,
+		return "", "", &ErrKeyValueInvalid{
+			value: rawString,
 			key:   parts[0],
 		}
 	}
 
 	key := strings.ReplaceAll(parts[0], ENV_SPLIT_CHAR, CONFIG_TREE_SEPARATOR)
 	value := parts[1]
-
-	return &Entry{
-		key:   key,
-		value: value,
-	}, nil
-}
-
-func handleFileEntry(entry *Entry) (*Entry, error) {
-	entry.key = strings.TrimSuffix(entry.key, CONFIG_TREE_SEPARATOR+"FILE")
 	var err error
-	if filePath := entry.value.(string); filePath == "" {
-		return nil, &ErrValueInvalid{
-			key:   entry.key,
-			value: entry.value,
+	if strings.HasSuffix(key, CONFIG_TREE_SEPARATOR+"FILE") {
+		key = strings.TrimSuffix(key, CONFIG_TREE_SEPARATOR+"FILE")
+		v, err := handleFileEntry(value)
+		if err != nil {
+			return "", "", err
 		}
-	} else if entry.value, err = readFromFile(filePath); err != nil {
-		return nil, &ErrValueInvalid{
-			key:    entry.key,
-			value:  entry.value,
-			nested: err,
-		}
+		value = string(v)
 	}
-	return entry, nil
+
+	return key, value, err
 }
 
-func readFromFile(filePath string) (string, error) {
-	log.Println("Loading config from file: " + filePath)
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	var buffer strings.Builder
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		buffer.WriteString(scanner.Text())
-	}
-	return strings.Trim(buffer.String(), "\r\n"), nil
-}
-
-func (c *ConfigStore) LoadFile(path string, entryChan chan<- *Entry, errChan chan<- error, finishChan chan<- bool) {
+func handleFileEntry(path string) ([]byte, error) {
+	var err error
 	file, err := os.Open(path)
 	if err != nil {
-		errChan <- err
-		return
+		return nil, err
 	}
 	defer file.Close()
+
+	var buffer bytes.Buffer
 	scanner := bufio.NewScanner(file)
-	nestedKey := []string{}
 	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSuffix(line, "\n")
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if !strings.Contains(line, "=") && strings.HasSuffix(line, ":") {
-			nestedKey = append(nestedKey, strings.TrimSuffix(line, ":"))
-			continue
-		}
-		if !strings.HasPrefix(line, "\t") || !strings.HasPrefix(line, "    ") {
-			nestedKey = []string{}
-		}
-		if entry, err := parseFileLine(line, nestedKey); err != nil {
-			errChan <- err
-		} else if entry != nil {
-			entryChan <- entry
-		}
+		buffer.Write(scanner.Bytes())
 	}
-	finishChan <- true
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	bytes := buffer.Bytes()
+	return bytes, nil
 }
 
-func parseFileLine(line string, nestedKey []string) (*Entry, error) {
-	for strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ") {
-		line = strings.TrimPrefix(line, "\t")
-		line = strings.TrimPrefix(line, "    ")
-	}
-	parts := strings.SplitN(line, "=", 2)
-	if len(parts) != 2 {
-		return nil, &ErrValueInvalid{
-			value: line,
-			key:   parts[0],
-		}
-	}
-	key := parts[0]
-	value := parts[1]
-
-	joinedKey := strings.Join(nestedKey, CONFIG_TREE_SEPARATOR) + CONFIG_TREE_SEPARATOR + key
-
-	return &Entry{
-		key:   joinedKey,
-		value: value,
-	}, nil
-}
+// func nestedMapToString(m map[string]interface{}) string {
+// 	buffer := strings.Builder{}
+// 	for key, value := range m {
+// 		switch entry := value.(type) {
+// 		case map[string]interface{}:
+// 			buffer.WriteString(fmt.Sprintf("%s:\n", key))
+// 			for _, line := range strings.Split(nestedMapToString(entry), "\n") {
+// 				buffer.WriteString(fmt.Sprintf("\t%s\n", line))
+// 			}
+// 		default:
+// 			buffer.WriteString(fmt.Sprintf("%s: %v\n", key, value))
+// 		}
+// 	}
+// 	return buffer.String()
+// }
