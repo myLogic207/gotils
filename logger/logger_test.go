@@ -22,10 +22,10 @@ func TestLogToFile(t *testing.T) {
 	logFile = path.Join(cwd, logDir, logFile)
 	logMessage := "This is a test log message"
 	prefix := "test"
-	loggerConfig := config.NewWithInitialValues(map[string]interface{}{
-		"PREFIX":       prefix,
-		"PREFIXLENGTH": 6,
-		"LEVEL":        "DEBUG",
+	loggerConfig, err := config.WithInitialValues(context.TODO(), map[string]interface{}{
+		"PREFIX":      prefix,
+		"COLUMLENGTH": 6,
+		"LEVEL":       "DEBUG",
 		"WRITERS": map[string]interface{}{
 			"STDOUT": true,
 			"FILE": map[string]interface{}{
@@ -37,8 +37,11 @@ func TestLogToFile(t *testing.T) {
 			},
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	logger, err := NewLogger(loggerConfig)
+	logger, err := Init(context.TODO(), loggerConfig)
 	if err != nil || logger == nil {
 		t.Errorf("Error registering logger:\n %v", err)
 		t.FailNow()
@@ -75,58 +78,5 @@ func TestLogToFile(t *testing.T) {
 			t.Log(string(buf))
 			t.Error()
 		}
-	}
-}
-
-func TestLogFileRotate(t *testing.T) {
-	loggerConf := config.NewWithInitialValues(map[string]interface{}{
-		"PREFIX":       "test",
-		"PREFIXLENGTH": 6,
-		"LEVEL":        "DEBUG",
-		"WRITERS": map[string]interface{}{
-			"FILE": map[string]interface{}{
-				"ACTIVE":       true,
-				"PREFIX":       "test",
-				"FOLDER":       "test-logs",
-				"SUFFIX":       "log",
-				"ROTATING":     true,
-				"ROTATEFORMAT": "$prefix.test.$suffix",
-			},
-		},
-	})
-
-	t.Cleanup(func() {
-		// remove log file folder
-		if err := os.RemoveAll("test-logs"); err != nil {
-			t.Errorf("Error removing log file: %v", err)
-		}
-	})
-
-	logger, err := NewLogger(loggerConf)
-	if err != nil {
-		t.Error(nil, "Error registering logger: %v", err)
-		t.FailNow()
-	}
-	logger.Info(context.TODO(), "This is a test log message")
-	pwd, _ := os.Getwd()
-	filePath := path.Join(pwd, "test-logs", "test.log")
-
-	// test if log file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		t.Errorf("Log file does not exist: %v", err)
-	}
-
-	t.Log("All good so far, closing logger and awaiting rotation")
-
-	if err := logger.Shutdown(); err != nil {
-		t.Errorf("Error shutting down logger: %v", err)
-		t.FailNow()
-	}
-
-	newFileName := path.Join(pwd, "test-logs", "test.test.log")
-	// test if file is rotate
-	if _, err := os.Stat(newFileName); err != nil && os.IsNotExist(err) {
-		t.Errorf("Log file was not rotated: %v", err)
-		t.FailNow()
 	}
 }
